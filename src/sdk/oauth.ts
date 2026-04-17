@@ -44,9 +44,28 @@ async function postJson<T>(url: string, body: Record<string, unknown>): Promise<
   if (res.statusCode >= 200 && res.statusCode < 300) {
     return parsed as T;
   }
-  const err = parsed as Record<string, any>;
-  const code = typeof err.error === 'string' ? err.error : err.error?.code || 'http_error';
-  const msg = err.error_description || err.error?.message || `HTTP ${res.statusCode}`;
+  // Errors may come in two shapes:
+  //  1. RFC 6749 flat:  { error: "authorization_pending", error_description: "..." }
+  //  2. FastAPI wrapped: { detail: { error: "...", error_description: "..." } }
+  //     or                { detail: "string" }
+  //     or                { detail: [ ... ] } (pydantic validation)
+  // We normalise all three so the CLI can reason about OAuth error codes.
+  const raw = parsed as Record<string, any>;
+  const payload =
+    raw && typeof raw.detail === 'object' && raw.detail !== null && !Array.isArray(raw.detail)
+      ? (raw.detail as Record<string, any>)
+      : raw;
+  const code =
+    typeof payload.error === 'string'
+      ? payload.error
+      : payload.error?.code ||
+        (typeof raw.detail === 'string' ? 'http_error' : undefined) ||
+        'http_error';
+  const msg =
+    payload.error_description ||
+    payload.error?.message ||
+    (typeof raw.detail === 'string' ? raw.detail : undefined) ||
+    `HTTP ${res.statusCode}`;
   throw new ApiError(res.statusCode ?? 0, code, msg, parsed);
 }
 

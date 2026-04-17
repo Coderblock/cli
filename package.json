@@ -1,6 +1,6 @@
 {
   "name": "@coderblock/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official CLI and MCP server for Coderblock.ai — initialize, push, pull and manage Coderblock projects from your terminal or from Claude Code / Cursor.",
   "keywords": [
     "coderblock",
@@ -18,7 +18,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/coderblock/cli.git"
+    "url": "git+https://github.com/coderblock/cli.git"
   },
   "license": "MIT",
   "author": "Coderblock <hello@coderblock.ai>",
