@@ -1,0 +1,67 @@
+{
+  "name": "@coderblock/cli",
+  "version": "0.1.0",
+  "description": "Official CLI and MCP server for Coderblock.ai — initialize, push, pull and manage Coderblock projects from your terminal or from Claude Code / Cursor.",
+  "keywords": [
+    "coderblock",
+    "ai",
+    "mcp",
+    "claude",
+    "cursor",
+    "cli",
+    "vibe-coding",
+    "fullstack"
+  ],
+  "homepage": "https://docs.coderblock.ai/cli",
+  "bugs": {
+    "url": "https://github.com/coderblock/cli/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coderblock/cli.git"
+  },
+  "license": "MIT",
+  "author": "Coderblock <hello@coderblock.ai>",
+  "bin": {
+    "coderblock": "bin/coderblock.js",
+    "coderblock-mcp": "bin/coderblock-mcp.js"
+  },
+  "type": "module",
+  "main": "./dist/sdk/index.js",
+  "types": "./dist/sdk/index.d.ts",
+  "files": [
+    "dist",
+    "bin",
+    "src/scaffolds",
+    "examples",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "commander": "^12.1.0",
+    "open": "^10.1.0",
+    "picocolors": "^1.1.1",
+    "tar": "^7.4.3",
+    "undici": "^7.0.0"
+  },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "@types/tar": "^6.1.13",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "coderblock": {
+      "command": "npx",
+      "args": ["-y", "@coderblock/cli", "mcp"]
+    }
+  }
+}
