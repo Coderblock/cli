@@ -115,3 +115,67 @@ alwaysApply: false
 ${skillMd}
 `;
 }
+
+// -----------------------------------------------------------------------------
+// First-run prompt to paste into Claude Code / Cursor / Codex after init.
+//
+// Mirrors the wording of apps/clients/how-to.md §6 ("Primo messaggio all'AI").
+// We embed the user's description so the agent starts already grounded in
+// what the project is about, and branch the scaffolding instructions on
+// frontend-only / gaming so the prompt remains accurate.
+// -----------------------------------------------------------------------------
+
+export interface InitialPromptInput {
+  name: string;
+  description: string;
+  category: string;
+  frontendOnly: boolean;
+}
+
+export function buildInitialPrompt(input: InitialPromptInput): string {
+  const { name, description, category, frontendOnly } = input;
+  const isGaming = ['gaming', '3d', 'game'].includes(category);
+
+  const desc = description.trim() || '(add a short description of the project here)';
+
+  if (isGaming) {
+    return [
+      `Read CLAUDE.md and public/assets/assets.json. Scaffold the base project`,
+      `structure and then build the game using the assets listed in the manifest.`,
+      ``,
+      `Project: ${name}`,
+      `Description: ${desc}`,
+      ``,
+      `Follow the conventions in CLAUDE.md and the skills installed under`,
+      `.claude/skills/ (Cursor reads them from .cursor/rules/). Do NOT install`,
+      `@supabase/supabase-js — use NeonDB for storage and Coderblock's OAuth relay`,
+      `for social login, exactly as described in the skills.`,
+    ].join('\n');
+  }
+
+  const backendBlock = frontendOnly
+    ? ''
+    : [
+        ``,
+        `For the backend, create main.py, core/config.py, core/database.py,`,
+        `requirements.txt, routes/health.py, routes/auth.py,`,
+        `services/auth_service.py, models/user.py and database/base_schema.sql.`,
+      ].join('\n');
+
+  return [
+    `Read CLAUDE.md and scaffold the base project structure following the`,
+    `conventions described there. Create every file marked as "exact"`,
+    `(vite.config.ts, router.tsx, main.tsx, index.css, tailwind.config.js,`,
+    `package.json, api.ts, postcss.config.js, tsconfig.json, index.html) and`,
+    `the base Layout.tsx.${backendBlock}`,
+    ``,
+    `Project: ${name}`,
+    `Category: ${category}`,
+    `Description: ${desc}`,
+    ``,
+    `Use the skills installed under .claude/skills/ (Cursor reads them from`,
+    `.cursor/rules/) before writing code from scratch. Do NOT install`,
+    `@supabase/supabase-js — use NeonDB for storage and Coderblock's OAuth relay`,
+    `for social login, exactly as described in the skills.`,
+  ].join('\n');
+}

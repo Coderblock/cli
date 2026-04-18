@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 import { logoutCommand } from './logout.js';
 import { listCommand } from './list.js';
 import { statusCommand } from './status.js';
-import { initCommand } from './init.js';
+import { initCommand, IDE_CHOICES, IdeChoice } from './init.js';
 import { pushCommand } from './push.js';
 import { pullCommand } from './pull.js';
 import { upgradeCommand } from './upgrade.js';
@@ -86,18 +86,33 @@ program
 program
   .command('init <name>')
   .description('Scaffold a new local Coderblock project in a directory named <name>.')
-  .option('--category <cat>', 'Project category (general, booking, ecommerce, content, dashboard, gaming, 3d, fintech, ...)', 'general')
+  .option(
+    '--category <cat>',
+    'Project category: general, business, ecommerce, fintech, booking, social, content, gaming, 3d, wellness.',
+  )
   .option('--description <text>', 'One-line description of the project.')
   .option('--frontend-only', 'Skip creating the backend/ folder.')
   .option('--framework <name>', 'Frontend framework template.', 'react-vite-ts')
+  .option(
+    '--ide <name>',
+    `AI coding assistant you'll use (${IDE_CHOICES.join(' | ')}).`,
+  )
+  .option(
+    '--no-interactive',
+    'Do not prompt interactively even if stdin is a TTY (use flags + defaults).',
+  )
   .option('--no-skills', 'Do not download or install skills right now.')
   .action(async (name: string, opts) => {
     try {
+      const ide = typeof opts.ide === 'string' ? (opts.ide as IdeChoice) : undefined;
       await initCommand(name, {
         category: opts.category,
         description: opts.description,
         frontendOnly: !!opts.frontendOnly,
         framework: opts.framework,
+        ide,
+        // Commander maps `--no-interactive` to `opts.interactive === false`.
+        noInteractive: opts.interactive === false,
         noSkills: opts.skills === false,
       });
     } catch (err) {

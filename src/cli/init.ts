@@ -12,6 +12,11 @@
 //     .cursor/rules/<skill>.mdc           (derived from SKILL.md)
 //     frontend/
 //     backend/                             (unless --frontend-only)
+//
+// When stdin is a TTY and the required pieces of information are missing,
+// we run a short interactive wizard (description, category, IDE of choice,
+// frontend-only). In non-TTY contexts (CI, piped input, `--no-interactive`)
+// we fall back to defaults and only the positional `<name>` is required.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,13 +27,48 @@ import { readConfig, skillsCacheDir } from '../sdk/config.js';
 import { loadCredentials } from '../sdk/credentials.js';
 import { fatal, log } from './common.js';
 import { SkillManifestEntry } from '../sdk/types.js';
-import { buildClaudeMd, claudeIgnore, cursorRules, skillToCursorMdc } from '../scaffolds/templates.js';
+import {
+  buildClaudeMd,
+  buildInitialPrompt,
+  claudeIgnore,
+  cursorRules,
+  skillToCursorMdc,
+} from '../scaffolds/templates.js';
+import { isInteractive, promptSelect, promptText } from './prompts.js';
+
+// Supported IDEs for the "which editor do you use?" step. We keep the
+// list closed because we use the value later to print IDE-specific
+// instructions.
+export const IDE_CHOICES = ['claude-code', 'cursor', 'codex', 'other'] as const;
+export type IdeChoice = (typeof IDE_CHOICES)[number];
+
+export const CATEGORY_CHOICES = [
+  { value: 'general', label: 'general', hint: 'Generic web app (default)' },
+  { value: 'business', label: 'business', hint: 'Dashboards, admin panels, SaaS' },
+  { value: 'ecommerce', label: 'ecommerce', hint: 'Online store, marketplace (+ Stripe)' },
+  { value: 'fintech', label: 'fintech', hint: 'Banking, payments (+ Stripe)' },
+  { value: 'booking', label: 'booking', hint: 'Reservations, scheduling (+ Stripe)' },
+  { value: 'social', label: 'social', hint: 'Social network, messaging' },
+  { value: 'content', label: 'content', hint: 'CMS, blog, portfolio' },
+  { value: 'gaming', label: 'gaming', hint: '2D browser games (Phaser)' },
+  { value: '3d', label: '3d', hint: '3D configurators / experiences (Three.js)' },
+  { value: 'wellness', label: 'wellness', hint: 'Health, fitness' },
+] as const;
+
+const IDE_LABELS: Record<IdeChoice, { label: string; hint: string }> = {
+  'claude-code': { label: 'Claude Code', hint: 'reads CLAUDE.md + .claude/skills/' },
+  cursor: { label: 'Cursor', hint: 'reads .cursorrules + .cursor/rules/' },
+  codex: { label: 'OpenAI Codex CLI', hint: 'reads CLAUDE.md + AGENTS.md' },
+  other: { label: 'Other / decide later', hint: 'no editor-specific hint printed' },
+};
 
 export interface LocalProjectConfig {
   name: string;
+  description?: string;
   category?: string;
   has_backend?: boolean;
   framework?: string;
+  ide?: IdeChoice;
   project_id?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -53,7 +93,10 @@ export interface InitOptions {
   description?: string;
   frontendOnly?: boolean;
   framework?: string;
-  // If true, skip downloading skills (e.g. offline / CI scaffolding).
+  ide?: IdeChoice;
+  /** Force a non-interactive run even when stdin is a TTY. */
+  noInteractive?: boolean;
+  /** If true, skip downloading skills (e.g. offline / CI scaffolding). */
   noSkills?: boolean;
 }
 
@@ -68,33 +111,38 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
     fatal(new Error(`Directory already exists: ${projectDir}`));
   }
 
+  // Resolve the four "interactive" inputs. We only prompt for values the
+  // user did NOT pass on the command line, so `--category gaming` + a
+  // wizard asking the other questions works as expected.
+  const resolved = await resolveInitInputs(name, opts);
+
   fs.mkdirSync(projectDir, { recursive: true });
   fs.mkdirSync(path.join(projectDir, 'frontend'), { recursive: true });
-  if (!opts.frontendOnly) {
+  if (!resolved.frontendOnly) {
     fs.mkdirSync(path.join(projectDir, 'backend'), { recursive: true });
   }
 
-  const category = opts.category ?? 'general';
   const framework = opts.framework ?? 'react-vite-ts';
 
   const localCfg: LocalProjectConfig = {
     name,
-    category,
-    has_backend: !opts.frontendOnly,
+    description: resolved.description || undefined,
+    category: resolved.category,
+    has_backend: !resolved.frontendOnly,
     framework,
+    ide: resolved.ide,
     project_id: null,
     created_at: new Date().toISOString(),
   };
   writeLocalConfig(projectDir, localCfg);
 
-  // Scaffolding files.
   fs.writeFileSync(
     path.join(projectDir, 'CLAUDE.md'),
     buildClaudeMd({
       name,
-      description: opts.description ?? '',
-      category,
-      frontendOnly: !!opts.frontendOnly,
+      description: resolved.description,
+      category: resolved.category,
+      frontendOnly: resolved.frontendOnly,
     }),
   );
   fs.writeFileSync(path.join(projectDir, '.cursorrules'), cursorRules());
@@ -104,7 +152,7 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
     path.join(projectDir, 'frontend', 'README.md'),
     `# ${name} — frontend\n\nPlace your React + Vite + TypeScript source under this folder.\nThe AI agent will populate it on your first \`coderblock push\`.\n`,
   );
-  if (!opts.frontendOnly) {
+  if (!resolved.frontendOnly) {
     fs.writeFileSync(
       path.join(projectDir, 'backend', 'README.md'),
       `# ${name} — backend\n\nPlace your Python + FastAPI source under this folder.\n`,
@@ -114,8 +162,8 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
   if (!opts.noSkills) {
     try {
       await installSkillsForProject(projectDir, {
-        category,
-        frontendOnly: !!opts.frontendOnly,
+        category: resolved.category,
+        frontendOnly: resolved.frontendOnly,
       });
     } catch (err) {
       log.warn('Skill install skipped (will retry on `coderblock upgrade`).');
@@ -125,11 +173,214 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
 
   console.log();
   log.ok(`Project scaffolded at ${pc.bold(projectDir)}`);
+
+  printNextSteps({
+    projectDir,
+    name,
+    ide: resolved.ide,
+    description: resolved.description,
+    category: resolved.category,
+    frontendOnly: resolved.frontendOnly,
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Input resolution (flags + interactive wizard)
+// -----------------------------------------------------------------------------
+
+interface ResolvedInputs {
+  description: string;
+  category: string;
+  frontendOnly: boolean;
+  ide: IdeChoice;
+}
+
+async function resolveInitInputs(
+  name: string,
+  opts: InitOptions,
+): Promise<ResolvedInputs> {
+  const interactive = isInteractive() && !opts.noInteractive;
+
+  // Start with whatever the user passed on the CLI.
+  let description = opts.description?.trim() || '';
+  let category = opts.category?.trim() || '';
+  let frontendOnly = Boolean(opts.frontendOnly);
+  let ide: IdeChoice | undefined = opts.ide;
+
+  if (category && !isKnownCategory(category)) {
+    fatal(
+      new Error(
+        `Unknown --category "${category}". Valid values: ${CATEGORY_CHOICES.map((c) => c.value).join(', ')}.`,
+      ),
+    );
+  }
+  if (ide && !IDE_CHOICES.includes(ide)) {
+    fatal(
+      new Error(
+        `Unknown --ide "${ide}". Valid values: ${IDE_CHOICES.join(', ')}.`,
+      ),
+    );
+  }
+
+  if (!interactive) {
+    // Non-TTY fallback: description stays empty if not passed (we'll
+    // still scaffold a valid project), category defaults to general.
+    return {
+      description,
+      category: category || 'general',
+      frontendOnly,
+      ide: ide ?? 'other',
+    };
+  }
+
+  // -- Interactive wizard --------------------------------------------------
   console.log();
-  log.info('Next steps:');
-  console.log(`  cd ${name}`);
-  console.log('  coderblock push      # creates the project on Coderblock.ai and uploads');
-  console.log('  # …or open the folder in Claude Code / Cursor first');
+  console.log(pc.bold(`Setting up ${pc.cyan(name)}`));
+  console.log(pc.dim('Press Enter to accept the default shown in parentheses.'));
+  console.log();
+
+  if (!description) {
+    description = await promptText(
+      'Short description of the project',
+      {
+        required: true,
+        validate: (v) =>
+          v.length >= 3 || 'Please describe the project in at least a few words.',
+      },
+    );
+  }
+
+  if (!category) {
+    category = await promptSelect(
+      'Project category',
+      CATEGORY_CHOICES.map((c) => ({
+        value: c.value,
+        label: c.label,
+        hint: c.hint,
+      })),
+      { default: 'general' },
+    );
+  }
+
+  // Only ask about --frontend-only if the user didn't pass it explicitly.
+  // When the flag is already set we trust it.
+  if (!opts.frontendOnly) {
+    const scope = await promptSelect<'fullstack' | 'frontend-only'>(
+      'Project scope',
+      [
+        {
+          value: 'fullstack',
+          label: 'fullstack',
+          hint: 'frontend + backend (FastAPI + NeonDB)',
+        },
+        {
+          value: 'frontend-only',
+          label: 'frontend only',
+          hint: 'just the React + Vite app',
+        },
+      ],
+      { default: 'fullstack' },
+    );
+    frontendOnly = scope === 'frontend-only';
+  }
+
+  if (!ide) {
+    ide = await promptSelect<IdeChoice>(
+      'Which AI coding assistant will you use on this project?',
+      IDE_CHOICES.map((v) => ({
+        value: v,
+        label: IDE_LABELS[v].label,
+        hint: IDE_LABELS[v].hint,
+      })),
+      { default: 'claude-code' },
+    );
+  }
+
+  return { description, category, frontendOnly, ide };
+}
+
+function isKnownCategory(v: string): boolean {
+  return CATEGORY_CHOICES.some((c) => c.value === v);
+}
+
+// -----------------------------------------------------------------------------
+// Next-steps printout (IDE-specific + exact first prompt)
+// -----------------------------------------------------------------------------
+
+interface NextStepsInput {
+  projectDir: string;
+  name: string;
+  ide: IdeChoice;
+  description: string;
+  category: string;
+  frontendOnly: boolean;
+}
+
+function printNextSteps(input: NextStepsInput): void {
+  const { projectDir, name, ide, description, category, frontendOnly } = input;
+  const relDir = path.relative(process.cwd(), projectDir) || name;
+
+  console.log();
+  log.info(pc.bold('1) Enter the project folder'));
+  console.log(`   cd ${relDir}`);
+
+  console.log();
+  log.info(pc.bold('2) Open it in your AI coding assistant'));
+
+  switch (ide) {
+    case 'claude-code':
+      console.log(`   cd ${relDir} && claude`);
+      console.log(
+        pc.dim(
+          '   Claude Code auto-loads CLAUDE.md and skills under .claude/skills/',
+        ),
+      );
+      break;
+    case 'cursor':
+      console.log(`   cursor ${relDir}`);
+      console.log(
+        pc.dim(
+          '   Cursor auto-loads .cursorrules and rules under .cursor/rules/',
+        ),
+      );
+      break;
+    case 'codex':
+      console.log(`   cd ${relDir} && codex`);
+      console.log(
+        pc.dim(
+          '   Codex reads CLAUDE.md / AGENTS.md — the skills under .claude/skills/ describe project conventions',
+        ),
+      );
+      break;
+    case 'other':
+      console.log(`   Open ${relDir} in your editor of choice.`);
+      console.log(
+        pc.dim(
+          '   Point the AI assistant at CLAUDE.md and .claude/skills/ before starting.',
+        ),
+      );
+      break;
+  }
+
+  const initialPrompt = buildInitialPrompt({
+    name,
+    description,
+    category,
+    frontendOnly,
+  });
+
+  console.log();
+  log.info(pc.bold('3) Paste this as the first message to the AI'));
+  console.log(pc.dim('   ──────────────────────────────────────────────'));
+  for (const line of initialPrompt.split('\n')) {
+    console.log(`   ${line}`);
+  }
+  console.log(pc.dim('   ──────────────────────────────────────────────'));
+
+  console.log();
+  log.info(pc.bold('4) When you are ready to sync to Coderblock.ai'));
+  console.log(`   coderblock push      ${pc.dim('# creates the project and uploads')}`);
+  console.log();
 }
 
 // -----------------------------------------------------------------------------
