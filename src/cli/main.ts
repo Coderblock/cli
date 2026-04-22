@@ -17,6 +17,7 @@ import { initCommand, IDE_CHOICES, IdeChoice } from './init.js';
 import { pushCommand } from './push.js';
 import { pullCommand } from './pull.js';
 import { upgradeCommand } from './upgrade.js';
+import { reshapeCommand } from './reshape.js';
 import { fatal } from './common.js';
 
 const program = new Command();
@@ -143,6 +144,41 @@ program
       await pullCommand(name, {
         projectId: opts.projectId,
         force: !!opts.force,
+        noSkills: opts.skills === false,
+      });
+    } catch (err) {
+      fatal(err);
+    }
+  });
+
+program
+  .command('reshape <name> [sourceDir]')
+  .description(
+    'Adapt an existing project (Claude Code, Cursor, bare Next.js/CRA/Astro/...) into a Coderblock-compatible layout.',
+  )
+  .option(
+    '--category <cat>',
+    'Project category: general, business, ecommerce, fintech, booking, social, content, gaming, 3d, wellness.',
+  )
+  .option('--description <text>', 'One-line description of the project.')
+  .option('--frontend-only', 'Force frontend-only (skip the backend/ folder).')
+  .option('--fullstack', 'Force fullstack (override auto-detection).')
+  .option(
+    '--ide <name>',
+    `AI coding assistant that will run the migration (${IDE_CHOICES.join(' | ')}).`,
+  )
+  .option('--no-interactive', 'Do not prompt interactively.')
+  .option('--no-skills', 'Do not download or install skills right now.')
+  .action(async (name: string, sourceDir: string | undefined, opts) => {
+    try {
+      const ide = typeof opts.ide === 'string' ? (opts.ide as IdeChoice) : undefined;
+      await reshapeCommand(name, sourceDir, {
+        category: opts.category,
+        description: opts.description,
+        frontendOnly: !!opts.frontendOnly,
+        fullstack: !!opts.fullstack,
+        ide,
+        noInteractive: opts.interactive === false,
         noSkills: opts.skills === false,
       });
     } catch (err) {
