@@ -1,6 +1,6 @@
 {
   "name": "@coderblock/cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Official CLI and MCP server for Coderblock.ai — initialize, push, pull and manage Coderblock projects from your terminal or from Claude Code / Cursor.",
   "keywords": [
     "coderblock",
