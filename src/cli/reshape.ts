@@ -19,6 +19,7 @@ import pc from 'picocolors';
 import { fatal, log } from './common.js';
 import {
   installSkillsForProject,
+  installExtraSkills,
   writeLocalConfig,
   LocalProjectConfig,
   CATEGORY_CHOICES,
@@ -30,6 +31,7 @@ import {
   claudeIgnore,
   cursorRules,
 } from '../scaffolds/templates.js';
+import { writeClaudeSettingsLocal } from '../scaffolds/external-skills.js';
 import { isInteractive, promptSelect, promptText } from './prompts.js';
 
 export interface ReshapeOptions {
@@ -166,7 +168,11 @@ export async function reshapeCommand(
       log.warn('Skill install skipped (will retry on `coderblock upgrade`).');
       if (err instanceof Error) log.dim(`  ${err.message}`);
     }
+
+    await installExtraSkills(projectDir);
   }
+
+  writeClaudeSettingsLocal(projectDir);
 
   // ---- Done --------------------------------------------------------------
   console.log();

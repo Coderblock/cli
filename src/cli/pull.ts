@@ -11,8 +11,9 @@ import pc from 'picocolors';
 import { CoderblockClient } from '../sdk/client.js';
 import { readConfig } from '../sdk/config.js';
 import { fatal, log } from './common.js';
-import { LocalProjectConfig, writeLocalConfig, installSkillsForProject, readLocalConfig, LOCAL_CONFIG_FILENAME } from './init.js';
+import { LocalProjectConfig, writeLocalConfig, installSkillsForProject, installExtraSkills, readLocalConfig, LOCAL_CONFIG_FILENAME } from './init.js';
 import { buildClaudeMd, claudeIgnore, cursorRules } from '../scaffolds/templates.js';
+import { writeClaudeSettingsLocal } from '../scaffolds/external-skills.js';
 
 export interface PullOptions {
   projectId?: string;
@@ -153,7 +154,14 @@ export async function pullCommand(nameOrDir: string | undefined, opts: PullOptio
       log.warn('Skill install skipped (run `coderblock upgrade` later).');
       if (err instanceof Error) log.dim(`  ${err.message}`);
     }
+
+    await installExtraSkills(targetDir);
   }
+
+  // Always (re)write `.claude/settings.local.json` so the agent-teams
+  // toggle is present even on machines that pulled the project for the
+  // first time.
+  writeClaudeSettingsLocal(targetDir);
 }
 
 async function promptIndex(max: number): Promise<number> {

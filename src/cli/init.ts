@@ -34,6 +34,11 @@ import {
   cursorRules,
   skillToCursorMdc,
 } from '../scaffolds/templates.js';
+import {
+  installBundledSkills,
+  installSuperpowersSkills,
+  writeClaudeSettingsLocal,
+} from '../scaffolds/external-skills.js';
 import { isInteractive, promptSelect, promptText } from './prompts.js';
 
 // Supported IDEs for the "which editor do you use?" step. We keep the
@@ -169,7 +174,14 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
       log.warn('Skill install skipped (will retry on `coderblock upgrade`).');
       if (err instanceof Error) log.dim(`  ${err.message}`);
     }
+
+    await installExtraSkills(projectDir);
   }
+
+  // Always enable Claude Code Agent Teams in the project's
+  // .claude/settings.local.json — even when --no-skills was passed.
+  // This is purely a local editor setting (no network/credentials).
+  writeClaudeSettingsLocal(projectDir);
 
   console.log();
   log.ok(`Project scaffolded at ${pc.bold(projectDir)}`);
@@ -419,6 +431,43 @@ export async function installSkillsForProject(
     log.ok(`Installed ${installed.length} skill${installed.length === 1 ? '' : 's'}: ${installed.join(', ')}`);
   }
   return installed;
+}
+
+/**
+ * Install the always-on extras layered on top of the Coderblock-managed
+ * skill catalogue:
+ *
+ *   - Bundled skills shipped inside this npm package
+ *     (`using-agent-teams`, ...)
+ *   - Superpowers skills from `obra/superpowers` (downloaded + cached)
+ *
+ * Both sources are non-fatal: a network outage or missing bundle just
+ * logs a warning. Re-runnable from `coderblock upgrade`.
+ */
+export async function installExtraSkills(projectDir: string): Promise<void> {
+  try {
+    const bundled = installBundledSkills(projectDir);
+    if (bundled.length) {
+      log.ok(
+        `Installed ${bundled.length} bundled skill${bundled.length === 1 ? '' : 's'}: ${bundled.join(', ')}`,
+      );
+    }
+  } catch (err) {
+    log.warn('Bundled skill install skipped.');
+    if (err instanceof Error) log.dim(`  ${err.message}`);
+  }
+
+  try {
+    const sp = await installSuperpowersSkills(projectDir);
+    if (sp.length) {
+      log.ok(
+        `Installed ${sp.length} Superpowers skill${sp.length === 1 ? '' : 's'} from obra/superpowers.`,
+      );
+    }
+  } catch (err) {
+    log.warn('Superpowers install skipped (will retry on `coderblock upgrade`).');
+    if (err instanceof Error) log.dim(`  ${err.message}`);
+  }
 }
 
 async function installSingleSkill(

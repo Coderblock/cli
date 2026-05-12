@@ -167,23 +167,63 @@ just asks in natural language.
 
 ```
 ~/.coderblock/
-├── credentials            # JSON, chmod 600
-├── config.json            # api_url, telemetry opt-in
-└── skills-cache/          # downloaded skills (per project version)
+├── credentials                    # JSON, chmod 600
+├── config.json                    # api_url, telemetry opt-in
+└── cache/
+    ├── skills/                    # Coderblock-managed skills (per version)
+    └── external-skills/
+        └── superpowers/           # obra/superpowers tarball (24h TTL)
 
 <project>/
-├── .coderblock.json       # project config (id, category, framework)
+├── .coderblock.json               # project config (id, category, framework)
 ├── .cursorrules
 ├── .gitignore
-├── CLAUDE.md              # generated, do edit freely
-├── .claude/skills/<name>/ # Claude Code / Anthropic-style skill
+├── CLAUDE.md                      # generated, edit freely
+├── .claude/
+│   ├── settings.local.json        # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+│   └── skills/<name>/             # Claude Code / Anthropic-style skills
 ├── .cursor/rules/<name>.mdc
-├── frontend/              # React + Vite + TS
-└── backend/               # Python + FastAPI (unless --frontend-only)
+├── frontend/                      # React + Vite + TS
+└── backend/                       # Python + FastAPI (unless --frontend-only)
 ```
 
 If you also have `keytar` installed globally (optional), the **refresh token**
 is mirrored to your OS keychain.
+
+## Pre-installed skill packs
+
+In addition to the Coderblock-managed catalogue served by
+`/api/v1/cli/skills`, every `init` / `pull` / `reshape` (and every
+`upgrade`) layers two extra sources into `<project>/.claude/skills/`:
+
+| Source | What it adds | How |
+|---|---|---|
+| **[Superpowers](https://github.com/obra/superpowers)** (MIT, by Jesse Vincent) | TDD, brainstorming, systematic-debugging, subagent-driven-development, writing-plans, code-review and similar agentic workflows. | Tarball downloaded from `obra/superpowers@main` and cached locally for 24h. |
+| **Bundled skills** (shipped inside this package) | `using-agent-teams` — operative reference for orchestrating Claude Code Agent Teams. | Copied straight from `src/scaffolds/bundled-skills/`. |
+
+Each skill is also mirrored to `<project>/.cursor/rules/<name>.mdc`
+so Cursor users get the same guidance.
+
+Both sources are non-fatal: if GitHub is unreachable, `init` still
+succeeds and a warning is printed (`coderblock upgrade` retries).
+Pass `--no-skills` to skip everything.
+
+### Agent Teams toggle
+
+`coderblock init` / `pull` / `reshape` / `upgrade` also ensure
+`<project>/.claude/settings.local.json` enables the experimental
+Agent Teams flag (Claude Code v2.1.32+):
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+The merge is non-destructive — any existing keys / env entries are
+preserved.
 
 ## Security
 

@@ -3,7 +3,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { installSkillsForProject, LOCAL_CONFIG_FILENAME, readLocalConfig } from './init.js';
+import {
+  installExtraSkills,
+  installSkillsForProject,
+  LOCAL_CONFIG_FILENAME,
+  readLocalConfig,
+} from './init.js';
+import { writeClaudeSettingsLocal } from '../scaffolds/external-skills.js';
 import { fatal, log } from './common.js';
 
 export async function upgradeCommand(nameOrDir: string | undefined): Promise<void> {
@@ -20,6 +26,8 @@ export async function upgradeCommand(nameOrDir: string | undefined): Promise<voi
       category: local.category,
       frontendOnly: local.has_backend === false,
     });
+    await installExtraSkills(targetDir);
+    writeClaudeSettingsLocal(targetDir);
     log.ok(`Upgrade complete. Skills: ${installed.join(', ') || '(none)'}`);
   } catch (err) {
     fatal(err);
