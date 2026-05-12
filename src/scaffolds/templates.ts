@@ -77,6 +77,209 @@ export function cursorRules(): string {
 `;
 }
 
+// -----------------------------------------------------------------------------
+// Backend `.env.example` + `.env` + README
+//
+// Why all three?
+//   - `.env.example` is committed and documents every variable `core/config.py`
+//     expects, so a teammate (or the AI on a follow-up turn) can see at a
+//     glance what needs setting.
+//   - `.env` is gitignored (see `claudeIgnore()`) and is written WITH a real
+//     randomly-generated SECRET_KEY so `uvicorn main:app` boots out of the
+//     box without the user having to remember `cp .env.example .env`. The
+//     DATABASE_URL points at a local Docker Postgres (postgres:postgres@
+//     localhost:5432/<project>) — the user picks how to bring that DB up.
+//   - `backend/README.md` ships the 5-line `docker run ...` recipe + the
+//     Neon free-tier alternative, and explicitly states the local vs. cloud
+//     contract: on `coderblock push`, the platform injects its own
+//     DATABASE_URL on Fly.io, so the local file never leaves the machine.
+//
+// The AI is told (via `buildInitialPrompt`) that these three files already
+// exist and must be EXTENDED (not overwritten) when it adds new env vars.
+// -----------------------------------------------------------------------------
+
+/** Sanitize a project name into a safe Postgres database identifier. */
+function pgDbName(projectName: string): string {
+  const cleaned = projectName.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  return cleaned || 'coderblock_app';
+}
+
+export interface BackendEnvInput {
+  name: string;
+  /** Pre-generated secret. When omitted, `.env.example` uses a placeholder. */
+  secretKey?: string;
+}
+
+/**
+ * Committed reference. Documents every variable the scaffolded backend reads.
+ * NeonDB is mentioned only as a *production* note — the active default is
+ * local Postgres so the project boots without an internet round-trip.
+ */
+export function buildBackendEnvExample(input: BackendEnvInput): string {
+  const db = pgDbName(input.name);
+  return `# Local backend configuration for ${input.name}.
+#
+# This file is COMMITTED and serves as the source of truth for which env vars
+# the backend needs. Copy it to .env (already done at scaffold time) and fill
+# in real values. .env itself is gitignored and never pushed to Coderblock.ai.
+#
+# On \`coderblock push\`, the platform injects a managed DATABASE_URL pointing
+# at a NeonDB instance on the Fly.io VM — you do NOT set Neon URLs here.
+
+# --- Database ----------------------------------------------------------------
+# !! REQUIRES A RUNNING POSTGRES SERVER ON YOUR MACHINE. !!
+# The URL below assumes Postgres is listening on localhost:5432 with the
+# default \`postgres\` superuser. \`uvicorn main:app\` will START even without
+# it, but the first DB query (auth, health check, etc.) will fail with
+# "connection refused" until you bring one of these up.
+#
+# Option A — Docker (recommended, no install on the host):
+#   docker run --name coderblock-pg -e POSTGRES_PASSWORD=postgres \\
+#     -p 5432:5432 -d postgres:16
+#   docker exec -it coderblock-pg createdb -U postgres ${db}
+#
+# Option B — Native macOS (Homebrew):
+#   brew install postgresql@16
+#   brew services start postgresql@16
+#   createdb ${db}
+#
+# Option C — NeonDB cloud (same stack as production):
+#   1. https://console.neon.tech → create project → copy connection string
+#   2. Replace the DATABASE_URL line below with the Neon one (comment this default).
+#      DATABASE_URL=postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/${db}
+
+# --- App secrets -------------------------------------------------------------
+# Random 32+ char string used to sign JWTs. The scaffold pre-fills .env with
+# a freshly generated value; keep this placeholder in .env.example.
+SECRET_KEY=replace-me-with-a-random-32-char-string
+`;
+}
+
+/**
+ * Local-only `.env`. Identical structure to `.env.example` but with a real
+ * SECRET_KEY pre-filled so `uvicorn` boots immediately after `pip install`.
+ */
+export function buildBackendEnv(input: BackendEnvInput): string {
+  const db = pgDbName(input.name);
+  const secret = input.secretKey || 'replace-me-with-a-random-32-char-string';
+  return `# Local-only env for ${input.name}. NEVER commit this file.
+# See .env.example for the documented version.
+
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/${db}
+SECRET_KEY=${secret}
+`;
+}
+
+/**
+ * Full backend README. Replaces the previous one-liner. Documents the local
+ * setup flow end-to-end so the user doesn't bounce off the first uvicorn run.
+ */
+export function buildBackendReadme(name: string): string {
+  const db = pgDbName(name);
+  return `# ${name} — backend
+
+Python + FastAPI app. On \`coderblock push\` this folder is deployed to a
+Fly.io VM and the Coderblock.ai runtime injects a managed NeonDB
+\`DATABASE_URL\` automatically. **Locally, you bring your own Postgres.**
+
+## Prerequisites
+
+Before running the backend you need both of these installed on your machine:
+
+1. **Python 3.11+** — the FastAPI + Pydantic v2 stack does NOT work on
+   Python 3.9 (the version that ships with macOS / Xcode).
+   - macOS: \`brew install python@3.11\` or use [pyenv](https://github.com/pyenv/pyenv)
+   - Linux: \`apt install python3.11 python3.11-venv\` (Debian/Ubuntu) or the
+     equivalent for your distro
+   - Verify: \`python3.11 --version\` should print \`Python 3.11.x\` (or higher).
+
+2. **A running Postgres server** — \`.env\` defaults to
+   \`postgresql://postgres:postgres@localhost:5432/${db}\`, which assumes
+   Postgres is listening on \`localhost:5432\`. Pick **one** of the three
+   options below; without one of them, \`uvicorn\` will start fine but the
+   first request that touches the DB will crash with \`connection refused\`.
+
+### Postgres — Option A: Docker (recommended, no host install)
+
+You need Docker (\`brew install --cask docker\` or
+[Docker Desktop](https://www.docker.com/products/docker-desktop/)).
+
+\`\`\`bash
+docker run --name coderblock-pg \\
+  -e POSTGRES_PASSWORD=postgres \\
+  -p 5432:5432 -d postgres:16
+
+# one-off — create the project's database
+docker exec -it coderblock-pg createdb -U postgres ${db}
+
+# verify it's up
+docker ps --filter name=coderblock-pg
+\`\`\`
+
+To stop it later: \`docker stop coderblock-pg\`. To resume: \`docker start coderblock-pg\`.
+
+### Postgres — Option B: Native macOS (Homebrew)
+
+\`\`\`bash
+brew install postgresql@16
+brew services start postgresql@16
+
+# create the project's database (this also installs the \`psql\`/\`createdb\` CLIs)
+createdb ${db}
+
+# verify it's up
+brew services list | grep postgresql
+\`\`\`
+
+You may also need to adjust \`DATABASE_URL\` in \`.env\`: a native Homebrew install
+typically uses your macOS username as the role and no password, so the URL
+becomes \`postgresql://$USER@localhost:5432/${db}\`.
+
+### Postgres — Option C: NeonDB cloud (same stack as production)
+
+No local install at all — sign up at <https://console.neon.tech>, create a
+project, copy the connection string and replace \`DATABASE_URL\` in
+\`backend/.env\` with the Neon one. Free tier is enough for dev.
+
+## Setup + run
+
+> **Check that \`backend/.env\` exists.** \`coderblock init\` writes it for you
+> with a real \`SECRET_KEY\` already filled in. **After \`coderblock pull\` or
+> a fresh \`git clone\`, \`.env\` will be missing** (it's gitignored and never
+> uploaded), so you have to recreate it:
+>
+> \`\`\`bash
+> cd backend
+> cp .env.example .env
+> # then edit .env: paste a real SECRET_KEY (e.g. \`python -c "import secrets; print(secrets.token_hex(32))"\`)
+> # and adjust DATABASE_URL if you're not using the default localhost Postgres.
+> \`\`\`
+
+Once the prerequisites above are in place and \`backend/.env\` exists:
+
+\`\`\`bash
+cd backend
+
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+uvicorn main:app --reload --port 8000
+\`\`\`
+
+The backend creates its tables on first boot via SQLAlchemy — no \`psql\`
+script required. Open <http://localhost:8000/docs> to browse the OpenAPI
+schema and confirm everything is wired.
+
+## What never leaves your machine
+
+\`backend/.env\` is in \`.gitignore\` and is filtered out by \`coderblock push\`.
+Production secrets (Neon URL, JWT key, third-party API keys) are managed by
+the Coderblock.ai dashboard and injected at deploy time.
+`;
+}
+
 export function claudeIgnore(): string {
   return `# Dependencies
 node_modules/
@@ -160,6 +363,21 @@ export function buildInitialPrompt(input: InitialPromptInput): string {
         `For the backend, create main.py, core/config.py, core/database.py,`,
         `requirements.txt, routes/health.py, routes/auth.py,`,
         `services/auth_service.py, models/user.py and database/base_schema.sql.`,
+        ``,
+        `IMPORTANT — backend env handling (already scaffolded, do NOT overwrite):`,
+        `- backend/.env exists with a real SECRET_KEY and DATABASE_URL pointing`,
+        `  at a local Postgres (postgresql://postgres:postgres@localhost:5432/...).`,
+        `  Leave it alone — it is gitignored and local-only.`,
+        `- backend/.env.example is the committed reference. Whenever you add a`,
+        `  new field to core/config.py Settings, append it to BOTH .env.example`,
+        `  (with a placeholder/comment) and .env (with a sensible local default),`,
+        `  never just one.`,
+        `- backend/README.md already documents the local setup. Do not replace it;`,
+        `  only append project-specific notes if needed.`,
+        `- Tables must be created on app startup via SQLAlchemy (e.g.`,
+        `  Base.metadata.create_all(engine) on the FastAPI startup event), so the`,
+        `  user does not need 'psql' installed. database/base_schema.sql may still`,
+        `  exist as reference, but the boot path must NOT require running it.`,
       ].join('\n');
 
   return [

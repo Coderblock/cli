@@ -13,6 +13,7 @@
 //      inlined — so the AI has everything it needs even without skills.
 //   5. Print next-step instructions + a copy-paste prompt.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
@@ -27,6 +28,9 @@ import {
   IdeChoice,
 } from './init.js';
 import {
+  buildBackendEnv,
+  buildBackendEnvExample,
+  buildBackendReadme,
   buildClaudeMd,
   claudeIgnore,
   cursorRules,
@@ -134,9 +138,21 @@ export async function reshapeCommand(
     `# ${name} — frontend (reshaped)\n\nThe AI assistant will migrate your legacy React/Next/Astro/... code from \`../.reshape-source/\` into this folder.\n`,
   );
   if (!resolved.frontendOnly) {
+    // Same backend skeleton as `init`: README + .env.example (committed) +
+    // .env (gitignored, with a random SECRET_KEY) so the migrated app boots
+    // immediately once dependencies are installed and a local Postgres exists.
+    const secretKey = crypto.randomBytes(32).toString('hex');
     fs.writeFileSync(
       path.join(projectDir, 'backend', 'README.md'),
-      `# ${name} — backend (reshaped)\n\nThe AI assistant will migrate your legacy server code from \`../.reshape-source/\` into this folder as FastAPI + NeonDB.\n`,
+      buildBackendReadme(name),
+    );
+    fs.writeFileSync(
+      path.join(projectDir, 'backend', '.env.example'),
+      buildBackendEnvExample({ name }),
+    );
+    fs.writeFileSync(
+      path.join(projectDir, 'backend', '.env'),
+      buildBackendEnv({ name, secretKey }),
     );
   }
 

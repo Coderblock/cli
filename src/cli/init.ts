@@ -18,6 +18,7 @@
 // frontend-only). In non-TTY contexts (CI, piped input, `--no-interactive`)
 // we fall back to defaults and only the positional `<name>` is required.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
@@ -28,6 +29,9 @@ import { loadCredentials } from '../sdk/credentials.js';
 import { fatal, log } from './common.js';
 import { SkillManifestEntry } from '../sdk/types.js';
 import {
+  buildBackendEnv,
+  buildBackendEnvExample,
+  buildBackendReadme,
   buildClaudeMd,
   buildInitialPrompt,
   claudeIgnore,
@@ -158,9 +162,21 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
     `# ${name} — frontend\n\nPlace your React + Vite + TypeScript source under this folder.\nThe AI agent will populate it on your first \`coderblock push\`.\n`,
   );
   if (!resolved.frontendOnly) {
+    // Backend skeleton: README + .env.example (committed) + .env (gitignored,
+    // with a real SECRET_KEY so `uvicorn main:app` boots out of the box once
+    // a local Postgres exists). See templates.ts for the rationale.
+    const secretKey = crypto.randomBytes(32).toString('hex');
     fs.writeFileSync(
       path.join(projectDir, 'backend', 'README.md'),
-      `# ${name} — backend\n\nPlace your Python + FastAPI source under this folder.\n`,
+      buildBackendReadme(name),
+    );
+    fs.writeFileSync(
+      path.join(projectDir, 'backend', '.env.example'),
+      buildBackendEnvExample({ name }),
+    );
+    fs.writeFileSync(
+      path.join(projectDir, 'backend', '.env'),
+      buildBackendEnv({ name, secretKey }),
     );
   }
 
