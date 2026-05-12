@@ -139,12 +139,17 @@ program
   .option('--project-id <uuid>', 'Pull a specific project by its id (otherwise: interactive picker).')
   .option('--force', 'Overwrite non-empty target directory.')
   .option('--no-skills', 'Do not install skills.')
+  .option(
+    '--no-interactive',
+    'Skip the post-pull backend/.env prompt and take the default (create a local-dev .env).',
+  )
   .action(async (name: string | undefined, opts) => {
     try {
       await pullCommand(name, {
         projectId: opts.projectId,
         force: !!opts.force,
         noSkills: opts.skills === false,
+        noInteractive: opts.interactive === false,
       });
     } catch (err) {
       fatal(err);

@@ -1,16 +1,62 @@
 # @coderblock/cli
 
-> Official CLI **and** MCP server for [Coderblock.ai](https://coderblock.ai) — the
-> cloud runtime for AI-generated fullstack apps.
-> Designed to pair with **Claude Code** and **Cursor**: you write code in
-> the editor, Coderblock gives it a home (preview URL, production deployment,
-> database, auth, billing).
+> Official CLI **and** MCP server for [Coderblock.ai](https://coderblock.ai).
+> One npm package, two binaries:
+>
+> - `coderblock` — interactive command-line interface.
+> - `coderblock-mcp` — stdio MCP server, so Claude Code / Cursor / Codex can
+>   manage Coderblock projects directly from the chat.
 
-One npm package, two binaries:
+## What is Coderblock.ai?
 
-- `coderblock` — interactive command-line interface.
-- `coderblock-mcp` — stdio MCP server, so Claude Code / Cursor can manage
-  Coderblock projects directly from the chat.
+**Coderblock.ai** is a **vibe-coding platform**: a cloud runtime where you
+describe what you want in natural language and dedicated **AI personal agents**
+build, deploy and operate your fullstack web app for you. You don't manage
+servers, databases, CI, preview environments or production deployments — the
+platform does. You describe, the agents build, Coderblock runs it.
+
+Every project on Coderblock comes with:
+
+- A **public preview URL** (`https://<id>.coderblock.dev`) that hot-reloads as
+  the agent edits files.
+- A **production deployment** on Fly.io (`https://<id>.coderblock.app`) reached
+  via `coderblock push`.
+- A **managed Postgres** (NeonDB) injected as `DATABASE_URL` at deploy time —
+  no DB provisioning, no migrations to wire by hand.
+- **Auth, billing and storage** primitives plugged in by the platform when the
+  agent decides the project needs them.
+- A small team of **specialized AI agents** (frontend, backend, DB, security,
+  UX, marketing, sales, …) that you can talk to inside the Coderblock app.
+
+## What this CLI is for
+
+You don't have to write code on coderblock.ai to use Coderblock. **This CLI is
+the bridge between any external editor you already love and the Coderblock
+runtime.** You stay in your tool, the AI agent inside your tool does the
+coding, and `coderblock` ships the result to the platform.
+
+```
+┌────────────────────────────┐                       ┌────────────────────────┐
+│ Your editor of choice      │   coderblock push     │ Coderblock.ai runtime  │
+│ • Claude Code              │ ────────────────────▶ │ • Preview on Fly.io    │
+│ • Cursor                   │                       │ • Production on Fly.io │
+│ • Codex CLI / Aider / …    │ ◀──────────────────── │ • Managed Postgres     │
+│ • Plain VS Code            │   coderblock pull     │ • Auth + billing       │
+└────────────────────────────┘                       └────────────────────────┘
+```
+
+Concretely, `@coderblock/cli` lets you:
+
+- **Scaffold** a Coderblock-shaped project on disk (`coderblock init`) —
+  React + Vite + TypeScript frontend + FastAPI + Postgres backend, with
+  `CLAUDE.md`, `.cursorrules`, skills, an env-ready backend, etc.
+- **Reshape** an existing legacy project (Next.js, CRA, Astro, plain Vite, …)
+  into the Coderblock layout without rewriting it by hand (`coderblock reshape`).
+- **Push** the local code to Coderblock so the platform builds & deploys it.
+- **Pull** an existing Coderblock project to any machine and resume work.
+- **Drive everything from your editor's chat** through the bundled MCP
+  server — Claude Code, Cursor and Codex CLI can call the same commands
+  via natural language ("push this project", "create a new app named X").
 
 ## Install
 
@@ -31,9 +77,13 @@ coderblock init my-crm --category booking
 
 cd my-crm
 
-# 3. Open in Claude Code / Cursor, edit the code, then push.
+# 3. Open in Claude Code / Cursor / Codex, let the agent build the app.
+#    The wizard already wrote CLAUDE.md, .cursorrules, skills, a ready-to-go
+#    backend/.env + backend/.env.example + backend/README.md.
+
+# 4. When you're happy with what's on disk, push to Coderblock.
 coderblock push --trigger-preview
-# → https://preview-abc123.coderblock.dev
+# → https://<id>.coderblock.dev
 ```
 
 To pull an existing project from Coderblock.ai to a new machine:
@@ -42,6 +92,12 @@ To pull an existing project from Coderblock.ai to a new machine:
 coderblock pull my-crm
 # or: coderblock pull my-crm --project-id <uuid>
 ```
+
+`pull` interactively asks whether to create a local-dev `backend/.env` for
+you (default: yes, with a freshly generated `SECRET_KEY` and a placeholder
+`DATABASE_URL` pointing at `localhost:5432`). Pass `--no-interactive` to take
+the default without being prompted, or pick *Skip* in the prompt if you want
+to wire `.env` yourself (e.g. against production env values).
 
 ## Reshape an existing project
 
@@ -57,7 +113,7 @@ What this does (purely mechanical — **no LLM is invoked by the CLI**):
 
 1. Scaffolds a fresh Coderblock project under `my-app/` (same output as
    `init`: `CLAUDE.md`, `.claude/skills/`, `.cursor/rules/`, `frontend/`,
-   `backend/`).
+   `backend/` with env + README, etc.).
 2. Installs the dedicated **`reshape-project`** skill alongside the standard
    ones.
 3. Copies the legacy source into `my-app/.reshape-source/` as a read-only
@@ -156,12 +212,68 @@ just asks in natural language.
 | `coderblock logout` | Revoke the session on the server and wipe local creds. |
 | `coderblock list` | Show your Coderblock projects. |
 | `coderblock status [name]` | Show session info and (optionally) a project. |
-| `coderblock init <name>` | Scaffold a local project folder (CLAUDE.md, skills, etc.). |
+| `coderblock init <name>` | Scaffold a local project folder (CLAUDE.md, skills, ready-to-run backend env, etc.). |
 | `coderblock reshape <name> [source]` | Adapt an existing project (Claude Code / Cursor / Next / Vite / CRA / …) to the Coderblock layout. No LLM is called by the CLI — the editor's AI does the migration using `RESHAPE.md` + the `reshape-project` skill. |
-| `coderblock push [name]` | Upload the project to Coderblock.ai. First push creates it. |
-| `coderblock pull [name]` | Download a project to a local folder. |
+| `coderblock push [name]` | Upload the project to Coderblock.ai. First push creates it. Filters out `.env`, `node_modules`, lockfiles, build artifacts. |
+| `coderblock pull [name]` | Download a project to a local folder. Offers to create a local-dev `backend/.env` (use `--no-interactive` to take the default without prompting). |
 | `coderblock upgrade [name]` | Refetch and reinstall skills at their latest versions. |
-| `coderblock mcp` | Run the MCP server on stdio (used by Claude Code / Cursor). |
+| `coderblock mcp` | Run the MCP server on stdio (used by Claude Code / Cursor / Codex). |
+
+## Backend local development
+
+`coderblock init` (and `reshape`) scaffold a **ready-to-run backend** so
+`uvicorn main:app --reload` works out of the box — provided you have the two
+prerequisites every Coderblock backend assumes:
+
+1. **Python 3.11+** — the FastAPI + Pydantic v2 stack does *not* work on
+   the Python 3.9 that ships with macOS / Xcode. On macOS:
+   `brew install python@3.11` or use [pyenv](https://github.com/pyenv/pyenv).
+2. **A running Postgres server** — pick any of the three options below.
+
+The scaffold writes three files into `<project>/backend/` for you:
+
+- **`backend/.env`** — gitignored, written at `init` time with a freshly
+  generated 64-char hex `SECRET_KEY` and a placeholder `DATABASE_URL` pointing
+  at `postgresql://postgres:postgres@localhost:5432/<dbname>`.
+- **`backend/.env.example`** — committed reference, documents every env var
+  the backend reads (the AI agent must keep this in sync with `core/config.py`).
+- **`backend/README.md`** — full setup walkthrough with the commands for each
+  of the three DB options below.
+
+### Three ways to provide a local Postgres
+
+| Option | Best when | How |
+|---|---|---|
+| **Docker** (recommended) | You already have Docker; want zero host install | `docker run --name coderblock-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:16` then `docker exec -it coderblock-pg createdb -U postgres <dbname>` |
+| **Native (Homebrew)** | You want `psql` on the host too | `brew install postgresql@16 && brew services start postgresql@16 && createdb <dbname>` (then adjust the URL — Homebrew uses your `$USER` as role, no password) |
+| **NeonDB cloud** | You want zero local install, same stack as production | Sign up on [console.neon.tech](https://console.neon.tech), copy the connection string, paste it into `backend/.env` |
+
+### Local vs. production: what changes
+
+`backend/.env` **never leaves your machine**: it's in `.gitignore` and is
+filtered out by `coderblock push` (along with `.env.local`, `.env.production`,
+`node_modules`, lockfiles, build artifacts). On the Coderblock.ai side, when
+the platform deploys your project to Fly.io it injects its own `DATABASE_URL`
+pointing at a managed NeonDB instance, plus production values for any other
+env var your backend reads. You do **not** set Neon URLs in your local file.
+
+### What happens on `coderblock pull`
+
+After tarball extraction, `pull` checks for `backend/.env.example` and, if
+`backend/.env` is missing, asks (interactive runs only):
+
+```
+? Create backend/.env for local development?
+  › 1. Local dev (recommended)  — placeholder DATABASE_URL (localhost Postgres) + fresh SECRET_KEY
+    2. Skip                     — I'll create backend/.env myself later (cp .env.example .env)
+```
+
+- **Local dev** writes the same `backend/.env` shape that `init` creates,
+  with a brand-new randomly generated `SECRET_KEY` per machine.
+- **Skip** leaves only `backend/.env.example` and prints the
+  `cp .env.example .env` reminder.
+- Non-interactive runs (`--no-interactive`, CI, piped stdin) silently take
+  the default → write a local-dev `.env`. Same semantics as `init`.
 
 ## What ends up on disk
 
@@ -177,14 +289,18 @@ just asks in natural language.
 <project>/
 ├── .coderblock.json               # project config (id, category, framework)
 ├── .cursorrules
-├── .gitignore
+├── .gitignore                     # ignores .env, .env.local, node_modules, …
 ├── CLAUDE.md                      # generated, edit freely
 ├── .claude/
 │   ├── settings.local.json        # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 │   └── skills/<name>/             # Claude Code / Anthropic-style skills
 ├── .cursor/rules/<name>.mdc
-├── frontend/                      # React + Vite + TS
-└── backend/                       # Python + FastAPI (unless --frontend-only)
+├── frontend/
+│   └── README.md                  # the AI populates this folder on first turn
+└── backend/                       # only if fullstack
+    ├── .env                       # gitignored, scaffolded with SECRET_KEY pre-filled
+    ├── .env.example               # committed reference
+    └── README.md                  # local setup walkthrough (Python + Postgres)
 ```
 
 If you also have `keytar` installed globally (optional), the **refresh token**
@@ -233,6 +349,9 @@ preserved.
 - Access tokens live 1 hour. Refresh tokens rotate on every use, 90-day TTL.
 - The package performs **no destructive operations**: there is no `delete`.
   Removal of a project is only possible from the Coderblock.ai dashboard.
+- `coderblock push` filters out `.env`, `.env.local`, `.env.production`,
+  `node_modules`, `__pycache__`, build artifacts and lockfiles before
+  uploading — secrets never leave your machine through this CLI.
 - All mutating calls are logged server-side so you can audit them under
   *Settings → Developer → Authorized CLI sessions*.
 

@@ -3,6 +3,7 @@
 // that were never initialised locally: we regenerate CLAUDE.md + .cursorrules
 // + skills from the project's category/backend metadata returned in headers.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -12,13 +13,16 @@ import { CoderblockClient } from '../sdk/client.js';
 import { readConfig } from '../sdk/config.js';
 import { fatal, log } from './common.js';
 import { LocalProjectConfig, writeLocalConfig, installSkillsForProject, installExtraSkills, readLocalConfig, LOCAL_CONFIG_FILENAME } from './init.js';
-import { buildClaudeMd, claudeIgnore, cursorRules } from '../scaffolds/templates.js';
+import { buildBackendEnv, buildClaudeMd, claudeIgnore, cursorRules } from '../scaffolds/templates.js';
 import { writeClaudeSettingsLocal } from '../scaffolds/external-skills.js';
+import { isInteractive, promptSelect } from './prompts.js';
 
 export interface PullOptions {
   projectId?: string;
   force?: boolean;
   noSkills?: boolean;
+  /** Force non-interactive mode even on a TTY. */
+  noInteractive?: boolean;
 }
 
 export async function pullCommand(nameOrDir: string | undefined, opts: PullOptions = {}): Promise<void> {
@@ -162,6 +166,80 @@ export async function pullCommand(nameOrDir: string | undefined, opts: PullOptio
   // toggle is present even on machines that pulled the project for the
   // first time.
   writeClaudeSettingsLocal(targetDir);
+
+  // `coderblock push` filters .env from the uploaded tarball (and `.env`
+  // is gitignored anyway), so after every pull the backend will be missing
+  // `backend/.env`. Offer to regenerate a local-dev version so the user
+  // can `uvicorn` immediately; otherwise they can configure it manually.
+  // The prompt is gated on `hasBackend` + TTY to stay safe in CI / scripted
+  // contexts.
+  if (hasBackend) {
+    await maybeCreateBackendEnv(targetDir, projectName, !!opts.noInteractive);
+  }
+}
+
+/**
+ * Offer to create `backend/.env` from the just-pulled `.env.example`. No-op
+ * when the project has no backend, when `.env.example` is missing, or when
+ * `.env` already exists (we never overwrite a user file).
+ *
+ * Interactive runs prompt the user with two choices: a "local dev" default
+ * that writes a placeholder `DATABASE_URL` + a freshly generated
+ * `SECRET_KEY`, or "skip" so they can decide later (e.g. when they intend
+ * to wire the pulled project to production env values manually).
+ *
+ * Non-interactive runs (`--no-interactive` or no TTY) silently fall back to
+ * the default — matches `init.ts` semantics: "skip the prompts, take the
+ * recommended option". This keeps `uvicorn main:app` bootable after a CI
+ * pull without surprising the user.
+ */
+async function maybeCreateBackendEnv(
+  projectDir: string,
+  projectName: string,
+  noInteractive: boolean,
+): Promise<void> {
+  const backendDir = path.join(projectDir, 'backend');
+  const envExamplePath = path.join(backendDir, '.env.example');
+  const envPath = path.join(backendDir, '.env');
+
+  if (!fs.existsSync(backendDir)) return;
+  if (!fs.existsSync(envExamplePath)) return;
+  if (fs.existsSync(envPath)) return;
+
+  const useDefault = noInteractive || !isInteractive();
+  let choice: 'local' | 'skip' = 'local';
+
+  if (!useDefault) {
+    console.log();
+    choice = await promptSelect<'local' | 'skip'>(
+      'Create backend/.env for local development?',
+      [
+        {
+          value: 'local',
+          label: 'Local dev (recommended)',
+          hint: 'placeholder DATABASE_URL (localhost Postgres) + fresh SECRET_KEY',
+        },
+        {
+          value: 'skip',
+          label: 'Skip',
+          hint: "I'll create backend/.env myself later (cp .env.example .env)",
+        },
+      ],
+      { default: 'local' },
+    );
+  }
+
+  if (choice !== 'local') {
+    log.dim('  Skipped. Run: cp backend/.env.example backend/.env  when ready.');
+    return;
+  }
+
+  const secretKey = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(envPath, buildBackendEnv({ name: projectName, secretKey }));
+  log.ok('Created backend/.env with a freshly generated SECRET_KEY.');
+  log.dim(
+    `  DATABASE_URL points at localhost Postgres — see ${pc.bold('backend/README.md')} for setup.`,
+  );
 }
 
 async function promptIndex(max: number): Promise<number> {
