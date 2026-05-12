@@ -1,6 +1,6 @@
 {
   "name": "@coderblock/cli",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "Official CLI and MCP server for Coderblock.ai — initialize, push, pull and manage Coderblock projects from your terminal or from Claude Code / Cursor.",
   "keywords": [
     "coderblock",
@@ -41,12 +41,16 @@
   "engines": {
     "node": ">=18.17.0"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -w -p tsconfig.json",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run build && chmod +x bin/coderblock.js bin/coderblock-mcp.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
