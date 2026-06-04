@@ -177,10 +177,13 @@ export class CoderblockClient {
   // Skills
   // -------------------------------------------------------------------------
 
-  listSkills(params: { category?: string; frontend_only?: boolean } = {}): Promise<{ skills: SkillManifestEntry[] }> {
+  listSkills(
+    params: { category?: string; frontend_only?: boolean; runtime?: 'supabase' | 'python' } = {},
+  ): Promise<{ skills: SkillManifestEntry[] }> {
     const qs = new URLSearchParams();
     if (params.category) qs.set('category', params.category);
     if (params.frontend_only != null) qs.set('frontend_only', String(params.frontend_only));
+    if (params.runtime) qs.set('runtime', params.runtime);
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return this.authed('GET', `/api/v1/cli/skills${suffix}`);
   }

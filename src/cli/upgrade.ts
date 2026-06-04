@@ -25,6 +25,7 @@ export async function upgradeCommand(nameOrDir: string | undefined): Promise<voi
     const installed = await installSkillsForProject(targetDir, {
       category: local.category,
       frontendOnly: local.has_backend === false,
+      runtime: local.runtime,
     });
     await installExtraSkills(targetDir);
     writeClaudeSettingsLocal(targetDir);

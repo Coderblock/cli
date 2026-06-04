@@ -60,6 +60,12 @@ export interface CreateProjectPayload {
   has_backend?: boolean;
   framework?: string;
   docker_image?: string | null;
+  /**
+   * Backend runtime — `supabase` (default for new "Web app" projects) or
+   * `python` (Enterprise "Web Platform"). The platform builds `tech_stack`
+   * from this and provisions the matching backend. `node` is frozen.
+   */
+  runtime?: 'supabase' | 'python';
 }
 
 export interface CliSession {

@@ -50,6 +50,10 @@ export async function pushCommand(nameOrDir: string | undefined, opts: PushOptio
         category: local.category ?? 'general',
         has_backend: local.has_backend !== false,
         framework: local.framework ?? 'react-vite-ts',
+        // Carry the runtime so the platform provisions the right backend
+        // (supabase → Supabase project; python → FastAPI + Neon). Older
+        // configs without a runtime fall back to the server-side default.
+        runtime: local.runtime,
       });
       local.project_id = created.id;
       writeLocalConfig(projectDir, local);

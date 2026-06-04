@@ -37,7 +37,12 @@ import {
   claudeIgnore,
   cursorRules,
   skillToCursorMdc,
+  ProjectRuntime,
 } from '../scaffolds/templates.js';
+import {
+  scaffoldSupabaseBackend,
+  scaffoldSupabaseFrontend,
+} from '../scaffolds/supabase.js';
 import {
   installBundledSkills,
   installSuperpowersSkills,
@@ -77,6 +82,13 @@ export interface LocalProjectConfig {
   category?: string;
   has_backend?: boolean;
   framework?: string;
+  /**
+   * Backend runtime: `supabase` (default for new "Web app" projects) or
+   * `python` (Enterprise "Web Platform"). `node` is frozen and never written
+   * for new projects. Optional for backward-compat with configs written by
+   * older CLI versions (absent ⇒ treat as `python`).
+   */
+  runtime?: ProjectRuntime;
   ide?: IdeChoice;
   project_id?: string | null;
   created_at?: string;
@@ -102,6 +114,11 @@ export interface InitOptions {
   description?: string;
   frontendOnly?: boolean;
   framework?: string;
+  /**
+   * Backend runtime (default `supabase`; `python` opt-in). `node` not offered.
+   * Raw string from the CLI flag — validated/normalized by `resolveRuntimeFlag`.
+   */
+  runtime?: string;
   ide?: IdeChoice;
   /** Force a non-interactive run even when stdin is a TTY. */
   noInteractive?: boolean;
@@ -125,6 +142,8 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
   // wizard asking the other questions works as expected.
   const resolved = await resolveInitInputs(name, opts);
 
+  const isSupabase = resolved.runtime === 'supabase';
+
   fs.mkdirSync(projectDir, { recursive: true });
   fs.mkdirSync(path.join(projectDir, 'frontend'), { recursive: true });
   if (!resolved.frontendOnly) {
@@ -139,6 +158,7 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
     category: resolved.category,
     has_backend: !resolved.frontendOnly,
     framework,
+    runtime: resolved.runtime,
     ide: resolved.ide,
     project_id: null,
     created_at: new Date().toISOString(),
@@ -152,19 +172,29 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
       description: resolved.description,
       category: resolved.category,
       frontendOnly: resolved.frontendOnly,
+      runtime: resolved.runtime,
     }),
   );
-  fs.writeFileSync(path.join(projectDir, '.cursorrules'), cursorRules());
+  fs.writeFileSync(path.join(projectDir, '.cursorrules'), cursorRules(resolved.runtime));
   fs.writeFileSync(path.join(projectDir, '.gitignore'), claudeIgnore());
 
   fs.writeFileSync(
     path.join(projectDir, 'frontend', 'README.md'),
     `# ${name} — frontend\n\nPlace your React + Vite + TypeScript source under this folder.\nThe AI agent will populate it on your first \`coderblock push\`.\n`,
   );
-  if (!resolved.frontendOnly) {
-    // Backend skeleton: README + .env.example (committed) + .env (gitignored,
-    // with a real SECRET_KEY so `uvicorn main:app` boots out of the box once
-    // a local Postgres exists). See templates.ts for the rationale.
+
+  if (isSupabase) {
+    // Supabase webapp: the frontend always gets the supabase-js integration +
+    // .env.example; the declarative backend (migrations + edge functions) only
+    // when the project is fullstack. There is NO FastAPI skeleton / .env.
+    scaffoldSupabaseFrontend(projectDir);
+    if (!resolved.frontendOnly) {
+      scaffoldSupabaseBackend(projectDir);
+    }
+  } else if (!resolved.frontendOnly) {
+    // Python backend skeleton: README + .env.example (committed) + .env
+    // (gitignored, with a real SECRET_KEY so `uvicorn main:app` boots out of
+    // the box once a local Postgres exists). See templates.ts for the rationale.
     const secretKey = crypto.randomBytes(32).toString('hex');
     fs.writeFileSync(
       path.join(projectDir, 'backend', 'README.md'),
@@ -185,6 +215,7 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
       await installSkillsForProject(projectDir, {
         category: resolved.category,
         frontendOnly: resolved.frontendOnly,
+        runtime: resolved.runtime,
       });
     } catch (err) {
       log.warn('Skill install skipped (will retry on `coderblock upgrade`).');
@@ -209,6 +240,7 @@ export async function initCommand(rawName: string, opts: InitOptions = {}): Prom
     description: resolved.description,
     category: resolved.category,
     frontendOnly: resolved.frontendOnly,
+    runtime: resolved.runtime,
   });
 }
 
@@ -220,7 +252,23 @@ interface ResolvedInputs {
   description: string;
   category: string;
   frontendOnly: boolean;
+  runtime: ProjectRuntime;
   ide: IdeChoice;
+}
+
+export function resolveRuntimeFlag(opts: { runtime?: string }): ProjectRuntime {
+  const raw = (opts.runtime ?? '').toString().trim().toLowerCase();
+  if (raw === 'python') return 'python';
+  if (raw === 'supabase' || raw === '') return 'supabase';
+  if (raw === 'node') {
+    fatal(
+      new Error(
+        'The "node" runtime is frozen and not available for new projects. Use --runtime supabase (Web app) or --runtime python (Web Platform).',
+      ),
+    );
+  }
+  fatal(new Error(`Unknown --runtime "${raw}". Valid values: supabase, python.`));
+  return 'supabase'; // unreachable (fatal throws)
 }
 
 async function resolveInitInputs(
@@ -234,6 +282,10 @@ async function resolveInitInputs(
   let category = opts.category?.trim() || '';
   let frontendOnly = Boolean(opts.frontendOnly);
   let ide: IdeChoice | undefined = opts.ide;
+  // Runtime: explicit flag wins; otherwise default supabase (may be confirmed
+  // by the wizard below for fullstack projects).
+  const runtimeExplicit = Boolean(opts.runtime);
+  let runtime: ProjectRuntime = resolveRuntimeFlag(opts);
 
   if (category && !isKnownCategory(category)) {
     fatal(
@@ -252,11 +304,13 @@ async function resolveInitInputs(
 
   if (!interactive) {
     // Non-TTY fallback: description stays empty if not passed (we'll
-    // still scaffold a valid project), category defaults to general.
+    // still scaffold a valid project), category defaults to general,
+    // runtime defaults to supabase (the new "Web app" default).
     return {
       description,
       category: category || 'general',
       frontendOnly,
+      runtime,
       ide: ide ?? 'other',
     };
   }
@@ -290,6 +344,27 @@ async function resolveInitInputs(
     );
   }
 
+  // Project type (maps to the backend runtime). Non-technical labels, mirroring
+  // the web creation UI. Only ask when the user didn't pin --runtime.
+  if (!runtimeExplicit) {
+    runtime = await promptSelect<ProjectRuntime>(
+      'Project type',
+      [
+        {
+          value: 'supabase',
+          label: 'Web app',
+          hint: 'Recommended — sign-in, database, storage & AI included',
+        },
+        {
+          value: 'python',
+          label: 'Web Platform',
+          hint: 'Python backend for B2B / ML / Python-centric teams',
+        },
+      ],
+      { default: 'supabase' },
+    );
+  }
+
   // Only ask about --frontend-only if the user didn't pass it explicitly.
   // When the flag is already set we trust it.
   if (!opts.frontendOnly) {
@@ -299,7 +374,10 @@ async function resolveInitInputs(
         {
           value: 'fullstack',
           label: 'fullstack',
-          hint: 'frontend + backend (FastAPI + NeonDB)',
+          hint:
+            runtime === 'supabase'
+              ? 'frontend + Supabase backend (auth, database, storage)'
+              : 'frontend + backend (FastAPI + NeonDB)',
         },
         {
           value: 'frontend-only',
@@ -324,7 +402,7 @@ async function resolveInitInputs(
     );
   }
 
-  return { description, category, frontendOnly, ide };
+  return { description, category, frontendOnly, runtime, ide };
 }
 
 function isKnownCategory(v: string): boolean {
@@ -342,10 +420,11 @@ interface NextStepsInput {
   description: string;
   category: string;
   frontendOnly: boolean;
+  runtime: ProjectRuntime;
 }
 
 function printNextSteps(input: NextStepsInput): void {
-  const { projectDir, name, ide, description, category, frontendOnly } = input;
+  const { projectDir, name, ide, description, category, frontendOnly, runtime } = input;
   const relDir = path.relative(process.cwd(), projectDir) || name;
 
   console.log();
@@ -395,6 +474,7 @@ function printNextSteps(input: NextStepsInput): void {
     description,
     category,
     frontendOnly,
+    runtime,
   });
 
   console.log();
@@ -417,7 +497,7 @@ function printNextSteps(input: NextStepsInput): void {
 
 export async function installSkillsForProject(
   projectDir: string,
-  opts: { category?: string; frontendOnly?: boolean } = {},
+  opts: { category?: string; frontendOnly?: boolean; runtime?: ProjectRuntime } = {},
 ): Promise<string[]> {
   const creds = await loadCredentials();
   if (!creds) {
@@ -430,6 +510,7 @@ export async function installSkillsForProject(
   const manifest = await client.listSkills({
     category: opts.category,
     frontend_only: opts.frontendOnly,
+    runtime: opts.runtime,
   });
   const installed: string[] = [];
 

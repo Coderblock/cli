@@ -21,6 +21,7 @@ import { fatal, log } from './common.js';
 import {
   installSkillsForProject,
   installExtraSkills,
+  resolveRuntimeFlag,
   writeLocalConfig,
   LocalProjectConfig,
   CATEGORY_CHOICES,
@@ -34,7 +35,12 @@ import {
   buildClaudeMd,
   claudeIgnore,
   cursorRules,
+  ProjectRuntime,
 } from '../scaffolds/templates.js';
+import {
+  scaffoldSupabaseBackend,
+  scaffoldSupabaseFrontend,
+} from '../scaffolds/supabase.js';
 import { writeClaudeSettingsLocal } from '../scaffolds/external-skills.js';
 import { isInteractive, promptSelect, promptText } from './prompts.js';
 
@@ -43,6 +49,8 @@ export interface ReshapeOptions {
   description?: string;
   frontendOnly?: boolean;
   fullstack?: boolean;
+  /** Target backend runtime: supabase (default) | python. `node` not offered. */
+  runtime?: string;
   ide?: IdeChoice;
   noInteractive?: boolean;
   noSkills?: boolean;
@@ -111,6 +119,7 @@ export async function reshapeCommand(
     category: resolved.category,
     has_backend: !resolved.frontendOnly,
     framework: 'react-vite-ts',
+    runtime: resolved.runtime,
     ide: resolved.ide,
     project_id: null,
     created_at: new Date().toISOString(),
@@ -124,9 +133,10 @@ export async function reshapeCommand(
       description: localCfg.description,
       category: resolved.category,
       frontendOnly: resolved.frontendOnly,
+      runtime: resolved.runtime,
     }),
   );
-  fs.writeFileSync(path.join(projectDir, '.cursorrules'), cursorRules());
+  fs.writeFileSync(path.join(projectDir, '.cursorrules'), cursorRules(resolved.runtime));
 
   // .gitignore: reuse standard + explicitly ignore the legacy snapshot.
   const gitignore = claudeIgnore() + '\n# Reshape legacy snapshot (delete once migration is complete)\n.reshape-source/\n';
@@ -137,10 +147,17 @@ export async function reshapeCommand(
     path.join(projectDir, 'frontend', 'README.md'),
     `# ${name} — frontend (reshaped)\n\nThe AI assistant will migrate your legacy React/Next/Astro/... code from \`../.reshape-source/\` into this folder.\n`,
   );
-  if (!resolved.frontendOnly) {
-    // Same backend skeleton as `init`: README + .env.example (committed) +
-    // .env (gitignored, with a random SECRET_KEY) so the migrated app boots
-    // immediately once dependencies are installed and a local Postgres exists.
+  if (resolved.runtime === 'supabase') {
+    // Supabase target: scaffold the declarative backend (migrations + edge
+    // functions) + the frontend supabase-js integration. No FastAPI / .env.
+    scaffoldSupabaseFrontend(projectDir);
+    if (!resolved.frontendOnly) {
+      scaffoldSupabaseBackend(projectDir);
+    }
+  } else if (!resolved.frontendOnly) {
+    // Python target: same backend skeleton as `init` — README + .env.example
+    // (committed) + .env (gitignored, with a random SECRET_KEY) so the migrated
+    // app boots once dependencies are installed and a local Postgres exists.
     const secretKey = crypto.randomBytes(32).toString('hex');
     fs.writeFileSync(
       path.join(projectDir, 'backend', 'README.md'),
@@ -170,6 +187,7 @@ export async function reshapeCommand(
       sourceDir,
       legacyFrameworks,
       frontendOnly: resolved.frontendOnly,
+      runtime: resolved.runtime,
     }),
   );
 
@@ -179,6 +197,7 @@ export async function reshapeCommand(
       await installSkillsForProject(projectDir, {
         category: resolved.category,
         frontendOnly: resolved.frontendOnly,
+        runtime: resolved.runtime,
       });
     } catch (err) {
       log.warn('Skill install skipped (will retry on `coderblock upgrade`).');
@@ -211,6 +230,7 @@ interface ResolvedReshapeInputs {
   description: string;
   category: string;
   frontendOnly: boolean;
+  runtime: ProjectRuntime;
   ide: IdeChoice;
 }
 
@@ -224,6 +244,10 @@ async function resolveReshapeInputs(
   let description = (opts.description || '').trim();
   let category = (opts.category || '').trim();
   let ide: IdeChoice | undefined = opts.ide;
+  // Target runtime: explicit flag wins; otherwise default supabase (the new
+  // "Web app" default), confirmed by the wizard for fullstack reshapes.
+  const runtimeExplicit = Boolean(opts.runtime);
+  let runtime: ProjectRuntime = resolveRuntimeFlag(opts);
 
   // Auto-detect scope from legacy frameworks unless flags override.
   const hasPythonLegacy = legacyFrameworks.some((f) =>
@@ -251,6 +275,7 @@ async function resolveReshapeInputs(
       description,
       category: category || 'general',
       frontendOnly,
+      runtime,
       ide: ide ?? 'other',
     };
   }
@@ -269,11 +294,34 @@ async function resolveReshapeInputs(
       { default: 'general' },
     );
   }
+  // Target project type (backend runtime). Non-technical labels.
+  if (!runtimeExplicit) {
+    runtime = await promptSelect<ProjectRuntime>(
+      'Target project type',
+      [
+        {
+          value: 'supabase',
+          label: 'Web app',
+          hint: 'Recommended — migrate onto Supabase (auth, database, storage, AI)',
+        },
+        {
+          value: 'python',
+          label: 'Web Platform',
+          hint: 'Keep/port a Python (FastAPI + Neon) backend',
+        },
+      ],
+      { default: 'supabase' },
+    );
+  }
   if (!opts.frontendOnly && !opts.fullstack) {
     const scope = await promptSelect<'fullstack' | 'frontend-only'>(
       'Project scope (auto-detected; confirm or change)',
       [
-        { value: 'fullstack', label: 'fullstack', hint: 'React + FastAPI + Neon' },
+        {
+          value: 'fullstack',
+          label: 'fullstack',
+          hint: runtime === 'supabase' ? 'React + Supabase backend' : 'React + FastAPI + Neon',
+        },
         { value: 'frontend-only', label: 'frontend only', hint: 'just the React app' },
       ],
       { default: frontendOnly ? 'frontend-only' : 'fullstack' },
@@ -291,7 +339,7 @@ async function resolveReshapeInputs(
     );
   }
 
-  return { description, category, frontendOnly, ide };
+  return { description, category, frontendOnly, runtime, ide };
 }
 
 function isKnownCategory(v: string): boolean {
@@ -434,11 +482,77 @@ interface ReshapeMdInput {
   sourceDir: string;
   legacyFrameworks: string[];
   frontendOnly: boolean;
+  runtime: ProjectRuntime;
 }
 
 function buildReshapeMd(input: ReshapeMdInput): string {
-  const { name, sourceDir, legacyFrameworks, frontendOnly } = input;
+  const { name, sourceDir, legacyFrameworks, frontendOnly, runtime } = input;
   const frameworks = legacyFrameworks.length ? legacyFrameworks.join(', ') : 'unknown';
+  const isSupabase = runtime === 'supabase';
+
+  // Target-layout backend block + the "normalize the backend" step both depend
+  // on the target runtime. Computed here to keep the big template readable.
+  const backendLayoutBlock = frontendOnly
+    ? ''
+    : isSupabase
+      ? `└── backend/
+    └── supabase/
+        ├── migrations/0000_init.sql   (roles + has_role() + profiles — already scaffolded)
+        ├── functions/_shared/cors.ts
+        ├── functions/health/index.ts
+        ├── functions/ai-chat/index.ts (AI → Coderblock AI Gateway)
+        └── config.toml`
+      : `└── backend/
+    ├── main.py
+    ├── requirements.txt
+    ├── api/
+    └── services/`;
+
+  const backendStep = frontendOnly
+    ? ''
+    : isSupabase
+      ? `### Step 2 — Normalize the backend onto Supabase
+
+Rule: **a Coderblock supabase webapp has NO server process and NO ORM.** The
+backend is the declarative \`backend/supabase/\` folder (already scaffolded with
+a baseline). Map the legacy backend onto the Supabase model:
+
+- **Routes / controllers** → either direct \`supabase.from(...)\` calls from the
+  React frontend (for plain CRUD, protected by RLS) OR a Deno **Edge Function**
+  under \`backend/supabase/functions/\` when the work is server-only (payments,
+  email, admin/service-role, secret API calls, AI). Call functions with
+  \`supabase.functions.invoke(...)\`.
+- **ORM models / SQL schema** → SQL **migrations** under
+  \`backend/supabase/migrations/\` (UTC-timestamped, append-only). For every
+  table: \`enable row level security\` + policies keyed to \`auth.uid()\`. Reuse
+  the scaffolded \`has_role()\` for admin gates. Keep
+  \`frontend/src/integrations/supabase/types.ts\` in sync.
+- **Custom auth (users table + bcrypt + JWT)** → **Supabase Auth**
+  (\`supabase.auth.*\`). Drop the custom user table; profiles + roles come from
+  the baseline migration (\`profiles\`, \`user_roles\`, \`handle_new_user()\`).
+- **AI / model calls** → the \`ai-chat\` Edge Function (already scaffolded) →
+  Coderblock AI Gateway. Never embed a model SDK or provider key in the frontend.
+- **Do NOT** create \`backend/package.json\`, an Express/FastAPI server, an ORM,
+  or a \`DATABASE_URL\`.
+
+Use the supabase skills under \`.claude/skills/\`
+(\`add-authentication-supabase\`, \`supabase-database\`, \`supabase-storage\`,
+\`supabase-edge-ai\`) — they codify these patterns.
+
+`
+      : `### Step 2 — Normalize the backend
+
+Rule: **Coderblock backends are FastAPI + PostgreSQL (Neon) + SQLAlchemy + Alembic**.
+
+- Translate every legacy server route into FastAPI under \`backend/api/endpoints/\`.
+- Move business logic into \`backend/services/\`.
+- Rewrite the database layer for \`DATABASE_URL\` → Neon. Never SQLite.
+- Entrypoint: \`backend/main.py\` with \`app = FastAPI(...)\`.
+- Pinned \`backend/requirements.txt\`.
+- If the legacy app had auth / Stripe / email, activate the matching
+  bundled skills (\`add-authentication\`, \`add-stripe-payments\`, …).
+
+`;
 
   return `# RESHAPE — Migrate legacy code into Coderblock layout
 
@@ -482,11 +596,7 @@ ${name}/
 │       ├── components/
 │       ├── lib/
 │       └── hooks/
-${frontendOnly ? '' : `└── backend/
-    ├── main.py
-    ├── requirements.txt
-    ├── api/
-    └── services/`}
+${backendLayoutBlock}
 \`\`\`
 
 Everything outside \`frontend/\`${frontendOnly ? '' : ' and `backend/`'} is NOT
@@ -522,19 +632,7 @@ Use the Coderblock frontend baseline: React 19, Vite 5+, TypeScript,
 Tailwind 3+, Radix UI, Framer Motion, React Router v7, Zustand, Lucide.
 Keep legacy deps only if actively used.
 
-${frontendOnly ? '' : `### Step 2 — Normalize the backend
-
-Rule: **Coderblock backends are FastAPI + PostgreSQL (Neon) + SQLAlchemy + Alembic**.
-
-- Translate every legacy server route into FastAPI under \`backend/api/endpoints/\`.
-- Move business logic into \`backend/services/\`.
-- Rewrite the database layer for \`DATABASE_URL\` → Neon. Never SQLite.
-- Entrypoint: \`backend/main.py\` with \`app = FastAPI(...)\`.
-- Pinned \`backend/requirements.txt\`.
-- If the legacy app had auth / Stripe / email, activate the matching
-  bundled skills (\`add-authentication\`, \`add-stripe-payments\`, …).
-
-`}### Step ${frontendOnly ? '2' : '3'} — Drop platform-incompatible artifacts
+${backendStep}### Step ${frontendOnly ? '2' : '3'} — Drop platform-incompatible artifacts
 
 - \`node_modules/\`, \`.next/\`, \`dist/\`, \`build/\`, \`.cache/\`, \`.turbo/\` — do not copy.
 - \`yarn.lock\`, \`pnpm-lock.yaml\`, \`bun.lockb\` — drop; we use \`package-lock.json\` (platform-generated).
@@ -556,7 +654,7 @@ Mental checks before declaring done (no shell execution required):
 1. \`frontend/package.json\` declares \`"dev": "vite"\` and React 19.
 2. \`frontend/src/main.tsx\` exists and mounts \`<App />\`.
 3. Every legacy route has a new page under \`frontend/src/pages/\`.
-${frontendOnly ? '' : '4. `backend/main.py` is importable with `uvicorn main:app`.\n'}${frontendOnly ? '4' : '5'}. No \`node_modules\`, \`.env\`, \`dist\` in the new tree.
+${frontendOnly ? '' : isSupabase ? '4. `backend/supabase/migrations/` has a valid baseline + RLS on every table; no `backend/package.json` / server / `DATABASE_URL`.\n' : '4. `backend/main.py` is importable with `uvicorn main:app`.\n'}${frontendOnly ? '4' : '5'}. No \`node_modules\`, \`.env\`, \`dist\` in the new tree.
 ${frontendOnly ? '5' : '6'}. \`.coderblock.json\` has all required keys.
 
 ### Step ${frontendOnly ? '5' : '6'} — Final summary

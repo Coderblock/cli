@@ -4,14 +4,32 @@
 // but as pure TypeScript so the CLI doesn't need to contact the server
 // to produce a working project on disk.
 
+/**
+ * Project runtime — the backend stack the project targets.
+ *   - `supabase`: pure React frontend + Supabase (Auth/DB/Storage/Edge Functions).
+ *                 Default for new "Web app" projects.
+ *   - `python`  : React frontend + FastAPI + Neon (Enterprise "Web Platform").
+ *
+ * `node` is frozen — existing projects keep working but it is never offered to
+ * new CLI projects (parity with the web creation UI, Decision 6).
+ */
+export type ProjectRuntime = 'supabase' | 'python';
+
 export interface ClaudeMdInput {
   name: string;
   description?: string;
   category?: string;
   frontendOnly?: boolean;
+  runtime?: ProjectRuntime;
 }
 
 export function buildClaudeMd(input: ClaudeMdInput): string {
+  const { runtime = 'python' } = input;
+  if (runtime === 'supabase') return buildSupabaseClaudeMd(input);
+  return buildPythonClaudeMd(input);
+}
+
+function buildPythonClaudeMd(input: ClaudeMdInput): string {
   const { name, description, category = 'general', frontendOnly = false } = input;
   const backendSection = frontendOnly
     ? ''
@@ -23,6 +41,35 @@ export function buildClaudeMd(input: ClaudeMdInput): string {
   auth/data of this *client* project — use NeonDB (PostgreSQL) for storage
   and Coderblock's OAuth relay for social login.
 - Keep secrets out of the repo. Use environment variables.
+
+### Backend rules the AI agent MUST follow
+
+These encode Coderblock runtime constraints — break them and the app works
+locally but fails in the cloud preview/production:
+
+- **Mount ALL FastAPI routers under \`/api\`.** Set \`API_PREFIX = "/api"\` and
+  \`app.include_router(r, prefix=f"{API_PREFIX}/...")\`. The frontend calls
+  \`/api/...\` and the preview/prod proxy forwards \`/api/*\` to the backend
+  *unstripped*; a router mounted at \`/auth\` (no \`/api\`) returns 404 in the preview.
+- **Frontend API base is \`/api\`.** Do NOT add a Vite \`server.proxy\` that
+  rewrites/strips the \`/api\` prefix. It "works" locally but the preview's nginx
+  (not Vite) serves \`/api\` without that rewrite, so every call 404s in preview.
+- **Always wrap raw SQL in \`text()\`** (\`from sqlalchemy import text\`):
+  \`conn.execute(text("SELECT ..."))\`. Bare strings raise SQLAlchemy 2.0
+  ObjectNotExecutableError, which silently breaks startup DDL and queries.
+- **Schema = idempotent, additive raw SQL** in \`backend/database/base_schema.sql\`:
+  \`CREATE TABLE IF NOT EXISTS\` for tables, and for every column added after the
+  first version \`ALTER TABLE <t> ADD COLUMN IF NOT EXISTS <col> <type>;\` placed
+  BEFORE any index that references it. (\`CREATE TABLE IF NOT EXISTS\` is a no-op
+  on an existing table, so it never adds new columns — only ADD COLUMN
+  IF NOT EXISTS reconciles a live DB.) NEVER destructive statements: no
+  \`DROP TABLE\`/\`SCHEMA\`/\`INDEX\`/\`FUNCTION\`/\`VIEW\`/\`TYPE\`/\`TRIGGER\`, no
+  \`ALTER TABLE ... DROP\`, no \`TRUNCATE\`, no \`DELETE FROM\` — the platform's
+  apply-schema guard rejects them (even inside comments). Use
+  \`CREATE OR REPLACE FUNCTION\`/\`CREATE OR REPLACE TRIGGER\` instead of DROP+CREATE.
+- **Keep schema and code in sync.** Every column/table the code queries (e.g. a
+  soft-delete \`deleted_at\`) MUST exist in base_schema.sql, backfilled via
+  \`ALTER TABLE ... ADD COLUMN IF NOT EXISTS\`. Querying a missing column 500s.
 `;
   const gamingNote = ['gaming', '3d', 'game'].includes(category)
     ? `\n## Gaming / 3D notes\n\nUse the \`threejs-builder\` / \`phaser-gamedev\` skills already installed.\nAssets go under \`frontend/public/assets/\`.\n`
@@ -49,6 +96,10 @@ Claude Code / Cursor and deployed on Coderblock.ai.
 - **Never** hardcode API keys. Use environment variables.
 - Prefer the skills installed under \`.claude/skills/\` before writing code
   from scratch — they codify Coderblock's production patterns.
+- The Vite dev server config MUST keep \`server: { host: '0.0.0.0', allowedHosts: true }\`.
+  The Coderblock preview serves the app on a dynamic \`*.coderblock.dev\` host that
+  Vite 5 otherwise blocks with "Blocked request … host is not allowed". Never
+  remove \`allowedHosts: true\`.
 
 ${backendSection}${gamingNote}
 
@@ -67,13 +118,107 @@ coderblock upgrade
 `;
 }
 
-export function cursorRules(): string {
+/**
+ * Supabase webapp CLAUDE.md — the inverse of the python one. Here Supabase IS
+ * the backend, so the rules tell the agent to USE supabase-js + migrations +
+ * Edge Functions + the AI gateway (no FastAPI/SQLAlchemy/Neon).
+ */
+function buildSupabaseClaudeMd(input: ClaudeMdInput): string {
+  const { name, description, category = 'general' } = input;
+  const gamingNote = ['gaming', '3d', 'game'].includes(category)
+    ? `\n## Gaming / 3D notes\n\nUse the \`threejs-builder\` / \`phaser-gamedev\` skills already installed.\nAssets go under \`frontend/public/assets/\`.\n`
+    : '';
+
+  return `# ${name}
+
+${description ? `> ${description}\n` : ''}
+This is a **Supabase web app** managed through the **Coderblock.ai** runtime and
+scaffolded with \`@coderblock/cli\`. It is a **pure React frontend + Supabase**
+backend — there is NO server process and NO ORM.
+
+## Stack
+
+- Frontend: React + Vite + TypeScript + Tailwind (mandatory stack).
+- Backend: **Supabase** — Postgres + Row Level Security, Supabase Auth, Supabase
+  Storage, and Deno **Edge Functions**. The declarative backend lives under
+  \`backend/supabase/\` (SQL migrations + functions + \`config.toml\`).
+- Project category: \`${category}\`.
+- Skills available to the AI agent: see \`.claude/skills/\`.
+
+## Folder shape
+
+\`\`\`
+frontend/
+  src/integrations/supabase/client.ts   # supabase-js client (DO NOT MODIFY the env wiring)
+  src/integrations/supabase/ai.ts        # sendChat/streamChat → ai-chat function
+backend/supabase/
+  migrations/0000_init.sql               # roles + has_role() + profiles + triggers
+  functions/_shared/cors.ts              # shared CORS helpers
+  functions/health/index.ts              # public health probe
+  functions/ai-chat/index.ts             # AI → Coderblock AI Gateway
+  config.toml                            # per-function verify_jwt + project ref
+\`\`\`
+
+## Rules the AI agent MUST follow
+
+- **Data/auth/storage from the frontend** go through \`@supabase/supabase-js\`:
+  \`supabase.from('table')…\`, \`supabase.auth.*\`, \`supabase.storage.*\`. There is
+  **no REST \`/api\` backend** to call.
+- **Authorization is RLS**, not UI guards. Every table: \`enable row level
+  security\` + policies keyed to \`auth.uid()\`. Reuse \`has_role()\` for admin gates.
+- **Schema changes = a new migration** under \`backend/supabase/migrations/\`
+  (UTC-timestamped, append-only — never edit an applied migration). Keep
+  \`src/integrations/supabase/types.ts\` in sync.
+- **Server-only logic** (payments, email, admin/service-role, secret API calls,
+  AI) goes in an **Edge Function** invoked via \`supabase.functions.invoke(...)\`.
+- **AI** goes through the \`ai-chat\` Edge Function → **Coderblock AI Gateway**.
+  NEVER call a model provider or embed a model SDK in the frontend, and never
+  put a provider/API key in the bundle.
+- **Never** add \`backend/package.json\`, an Express/FastAPI server, an ORM, or a
+  \`DATABASE_URL\` — none of those exist in this runtime.
+- Prefer the supabase skills under \`.claude/skills/\`
+  (\`add-authentication-supabase\`, \`supabase-database\`, \`supabase-storage\`,
+  \`supabase-edge-ai\`, …) before writing code from scratch.
+${gamingNote}
+## Workflow
+
+\`\`\`bash
+# First push — creates the supabase project on Coderblock.ai and uploads code.
+coderblock push
+
+# Pull latest server state into this folder.
+coderblock pull
+
+# Refresh skills to latest versions.
+coderblock upgrade
+\`\`\`
+`;
+}
+
+export function cursorRules(runtime: ProjectRuntime = 'python'): string {
+  if (runtime === 'supabase') {
+    return `# Cursor rules for Coderblock supabase webapps
+# The agent MUST:
+# - Follow rules in CLAUDE.md
+# - Use skills in .cursor/rules/*.mdc as primary reference
+# - Use @supabase/supabase-js for data/auth/storage (no REST /api backend)
+# - Put schema changes in backend/supabase/migrations/ (append-only) + enable RLS
+# - Put server-only logic in Edge Functions; AI goes through the ai-chat function
+# - Never add a FastAPI/Express server, an ORM, or a DATABASE_URL
+`;
+  }
   return `# Cursor rules for Coderblock projects
 # The agent MUST:
 # - Follow rules in CLAUDE.md
 # - Use skills in .cursor/rules/*.mdc as primary reference
 # - Never install supabase client libraries in this project
 # - Use NeonDB + Coderblock OAuth relay for auth / storage
+# - Mount ALL FastAPI routers under /api (frontend calls /api; the preview proxy
+#   forwards /api unstripped — a router without /api 404s in preview)
+# - Keep vite.config server.allowedHosts: true; never add a proxy that strips /api
+# - Wrap raw SQL in text(); schema is CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN
+#   IF NOT EXISTS (never DROP/destructive — use CREATE OR REPLACE TRIGGER/FUNCTION)
+# - Every column the code queries must exist in backend/database/base_schema.sql
 `;
 }
 
@@ -333,13 +478,42 @@ export interface InitialPromptInput {
   description: string;
   category: string;
   frontendOnly: boolean;
+  runtime?: ProjectRuntime;
 }
 
 export function buildInitialPrompt(input: InitialPromptInput): string {
-  const { name, description, category, frontendOnly } = input;
+  const { name, description, category, frontendOnly, runtime = 'python' } = input;
   const isGaming = ['gaming', '3d', 'game'].includes(category);
 
   const desc = description.trim() || '(add a short description of the project here)';
+
+  if (runtime === 'supabase') {
+    return [
+      `Read CLAUDE.md and scaffold the base React + Vite + TypeScript app`,
+      `(vite.config.ts, router.tsx, main.tsx, index.css, tailwind.config.js,`,
+      `package.json with @supabase/supabase-js, postcss.config.js, tsconfig.json,`,
+      `index.html) and the base Layout.tsx.`,
+      ``,
+      `This is a SUPABASE web app — there is NO server and NO ORM:`,
+      `- Data/auth/storage go through @supabase/supabase-js`,
+      `  (src/integrations/supabase/client.ts is already scaffolded). No REST /api.`,
+      `- Schema changes are SQL migrations under backend/supabase/migrations/`,
+      `  (append-only, UTC-timestamped) with RLS enabled and policies on auth.uid().`,
+      `  The baseline 0000_init.sql (roles + has_role() + profiles) is already there.`,
+      `- Server-only logic (payments, email, admin, AI) goes in Deno Edge Functions`,
+      `  under backend/supabase/functions/ and is called via supabase.functions.invoke.`,
+      `- AI goes through the ai-chat Edge Function → Coderblock AI Gateway`,
+      `  (src/integrations/supabase/ai.ts). Never embed a model SDK / key in the frontend.`,
+      ``,
+      `Project: ${name}`,
+      `Category: ${category}`,
+      `Description: ${desc}`,
+      ``,
+      `Use the supabase skills installed under .claude/skills/ (Cursor reads them`,
+      `from .cursor/rules/) before writing code from scratch. Do NOT add a`,
+      `FastAPI/Express server, an ORM, or a DATABASE_URL.`,
+    ].join('\n');
+  }
 
   if (isGaming) {
     return [
@@ -374,10 +548,24 @@ export function buildInitialPrompt(input: InitialPromptInput): string {
         `  never just one.`,
         `- backend/README.md already documents the local setup. Do not replace it;`,
         `  only append project-specific notes if needed.`,
-        `- Tables must be created on app startup via SQLAlchemy (e.g.`,
-        `  Base.metadata.create_all(engine) on the FastAPI startup event), so the`,
-        `  user does not need 'psql' installed. database/base_schema.sql may still`,
-        `  exist as reference, but the boot path must NOT require running it.`,
+        ``,
+        `IMPORTANT — Coderblock runtime rules (work locally but break the cloud`,
+        `preview if ignored):`,
+        `- Mount ALL FastAPI routers under the /api prefix: API_PREFIX = "/api",`,
+        `  app.include_router(r, prefix=f"{API_PREFIX}/..."). The frontend calls`,
+        `  /api and the preview proxy forwards /api unstripped — a router without`,
+        `  /api returns 404 in preview.`,
+        `- Frontend API base is /api. Do NOT add a Vite server.proxy that rewrites`,
+        `  or strips /api (it works locally but 404s in the cloud preview).`,
+        `- Keep vite.config server.allowedHosts: true (the preview host is dynamic).`,
+        `- Schema lives in database/base_schema.sql as idempotent, ADDITIVE raw SQL:`,
+        `  CREATE TABLE IF NOT EXISTS + (for later columns) ALTER TABLE ... ADD`,
+        `  COLUMN IF NOT EXISTS, placed before indexes that use them. NEVER`,
+        `  destructive SQL (no DROP TABLE/TRIGGER, ALTER ... DROP, TRUNCATE,`,
+        `  DELETE FROM) — the platform's apply-schema rejects it; use CREATE OR`,
+        `  REPLACE TRIGGER/FUNCTION. Always run raw SQL through SQLAlchemy text().`,
+        `- Every column the code queries (e.g. a soft-delete deleted_at) MUST exist`,
+        `  in base_schema.sql, backfilled with ALTER TABLE ... ADD COLUMN IF NOT EXISTS.`,
       ].join('\n');
 
   return [

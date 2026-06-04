@@ -95,6 +95,10 @@ program
   .option('--frontend-only', 'Skip creating the backend/ folder.')
   .option('--framework <name>', 'Frontend framework template.', 'react-vite-ts')
   .option(
+    '--runtime <name>',
+    'Backend runtime: supabase (Web app, default) | python (Web Platform).',
+  )
+  .option(
     '--ide <name>',
     `AI coding assistant you'll use (${IDE_CHOICES.join(' | ')}).`,
   )
@@ -111,6 +115,7 @@ program
         description: opts.description,
         frontendOnly: !!opts.frontendOnly,
         framework: opts.framework,
+        runtime: typeof opts.runtime === 'string' ? opts.runtime : undefined,
         ide,
         // Commander maps `--no-interactive` to `opts.interactive === false`.
         noInteractive: opts.interactive === false,
@@ -169,6 +174,10 @@ program
   .option('--frontend-only', 'Force frontend-only (skip the backend/ folder).')
   .option('--fullstack', 'Force fullstack (override auto-detection).')
   .option(
+    '--runtime <name>',
+    'Target backend runtime: supabase (Web app, default) | python (Web Platform).',
+  )
+  .option(
     '--ide <name>',
     `AI coding assistant that will run the migration (${IDE_CHOICES.join(' | ')}).`,
   )
@@ -182,6 +191,7 @@ program
         description: opts.description,
         frontendOnly: !!opts.frontendOnly,
         fullstack: !!opts.fullstack,
+        runtime: typeof opts.runtime === 'string' ? opts.runtime : undefined,
         ide,
         noInteractive: opts.interactive === false,
         noSkills: opts.skills === false,
